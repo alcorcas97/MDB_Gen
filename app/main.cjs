@@ -398,7 +398,7 @@ function requestJson(url) {
   });
 }
 
-function downloadFile(url, destinationPath) {
+function downloadFile(url, destinationPath, redirectCount = 0) {
   return new Promise((resolve, reject) => {
     const fileStream = fs.createWriteStream(destinationPath);
     const request = https.get(url, {
@@ -406,6 +406,29 @@ function downloadFile(url, destinationPath) {
         'User-Agent': 'Fiber-MDB-Generator'
       }
     }, (response) => {
+      const statusCode = Number(response.statusCode ?? 0);
+      const location = String(response.headers?.location ?? '').trim();
+
+      if (statusCode >= 300 && statusCode < 400 && location) {
+        fileStream.close(() => {});
+        fs.rm(destinationPath, { force: true }, () => {});
+        response.resume();
+
+        if (redirectCount >= 5) {
+          reject(new Error('Demasiadas redirecciones descargando el instalador.'));
+          return;
+        }
+
+        try {
+          const redirectedUrl = new URL(location, url).toString();
+          resolve(downloadFile(redirectedUrl, destinationPath, redirectCount + 1));
+        }
+        catch (error) {
+          reject(error);
+        }
+        return;
+      }
+
       if (!response.statusCode || response.statusCode >= 400) {
         fileStream.close(() => {});
         fs.rm(destinationPath, { force: true }, () => {});
@@ -501,7 +524,11 @@ async function maybeCheckForAppUpdates() {
       appendRuntimeLog(`update-check download-start target=${targetPath}`);
       await downloadFile(installerAsset.browser_download_url, targetPath);
       appendRuntimeLog(`update-check download-complete target=${targetPath}`);
-      await shell.openPath(targetPath);
+      const openResult = await shell.openPath(targetPath);
+      appendRuntimeLog(`update-check open-result ${openResult ? `error=${openResult}` : 'ok'}`);
+      if (openResult) {
+        throw new Error(`No se ha podido abrir el instalador descargado: ${openResult}`);
+      }
       return;
     }
 
