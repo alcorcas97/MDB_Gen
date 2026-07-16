@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Riser | Fiber MDB Generator</title>
+    <link rel="stylesheet" href="./styles.css">
+    <link rel="stylesheet" href="./riser.css">
+  </head>
+  <body>
+    <div class="app-shell riser-shell">
+      <header class="hero hero-riser">
+        <div class="hero-copy">
+          <p class="eyebrow">CTTH Delivery</p>
+          <h1>Riser</h1>
+          <p class="lead">
+            Genera y ajusta las filas de <strong>Traject</strong>, <strong>Duct</strong> y <strong>Accesspoint</strong>
+            para un DP concreto. Las conexiones resueltas actualizarán también el <strong>Kabeltype</strong> a
+            <code>2V_GVK-IH_PR05</code>.
+          </p>
+        </div>
+
+        <div class="hero-stats">
+          <article class="hero-card">
+            <span>Proyecto</span>
+            <strong id="projectLabelCard">Cargando...</strong>
+          </article>
+          <article class="hero-card">
+            <span>DP actual</span>
+            <strong id="dpLabelCard">Pendiente</strong>
+          </article>
+          <article class="hero-card">
+            <span>Conexiones</span>
+            <strong id="connectionCountCard">0</strong>
+          </article>
+        </div>
+      </header>
+
+      <main class="riser-layout">
+        <section class="panel riser-main-panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Configuración</p>
+              <h2>Trabajo del riser</h2>
+            </div>
+            <button id="reloadButton" class="button tertiary" type="button">Recargar datos</button>
+          </div>
+
+          <div class="riser-form-grid">
+            <label class="field">
+              <span>DP del riser</span>
+              <select id="dpSelect"></select>
+            </label>
+
+            <label class="field">
+              <span>Número de tubos</span>
+              <input id="tubeCountInput" type="number" min="1" max="24" step="1" value="1">
+            </label>
+
+            <label class="field field-wide">
+              <span>Códigos postales</span>
+              <input id="postcodeInput" type="text" spellcheck="false" placeholder="Ejemplo: 1024CC, 1024CH">
+            </label>
+          </div>
+
+          <div id="statusBanner" class="status-banner" data-tone="neutral">
+            Cargando datos de FC y BC para preparar el riser...
+          </div>
+
+          <div id="tubeList" class="tube-list"></div>
+
+          <div class="action-row">
+            <button id="applyButton" class="button primary" type="button">Aplicar riser al MDB</button>
+            <button id="resetButton" class="button secondary" type="button">Reiniciar vista</button>
+          </div>
+        </section>
+
+        <aside class="panel panel-side riser-side-panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Resumen</p>
+              <h2>Comprobación</h2>
+            </div>
+          </div>
+
+          <div class="stat-grid">
+            <article class="stat-card">
+              <span>FC / BC</span>
+              <strong id="sourceCountStatus">0</strong>
+              <small id="sourceCountDetail">Sin cargar</small>
+            </article>
+
+            <article class="stat-card" id="resolvedCard" data-tone="neutral">
+              <span>Resueltas</span>
+              <strong id="resolvedCountStatus">0</strong>
+              <small id="resolvedCountDetail">Sin revisar</small>
+            </article>
+
+            <article class="stat-card" id="etCard" data-tone="neutral">
+              <span>ET elegidos</span>
+              <strong id="etCountStatus">0</strong>
+              <small id="etCountDetail">Faltan coordenadas</small>
+            </article>
+          </div>
+
+          <div class="notice">
+            <h3>Cómo resuelve cada posición</h3>
+            <p>
+              El programa busca cada casa dentro de los códigos postales indicados. Si encuentra varias opciones,
+              primero prioriza el DP seleccionado y, si aún quedan varias, te deja elegir el Kabel ID exacto.
+            </p>
+          </div>
+
+          <div class="notice">
+            <h3>Log</h3>
+            <div id="logOutput" class="log-output riser-log-output" aria-live="polite"></div>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <script src="./riser.js"></script>
+  </body>
+</html>

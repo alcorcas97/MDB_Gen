@@ -1,0 +1,53 @@
+{
+  "appId": "com.cocon.cr-vn-studio",
+  "productName": "CR VN Studio",
+  "asar": false,
+  "compression": "store",
+  "directories": {
+    "output": "dist-cr"
+  },
+  "extraResources": [
+    {
+      "from": "template.mdb",
+      "to": "template.mdb"
+    }
+  ],
+  "files": [
+    "app-cr/**/*",
+    "app/assets/icon.ico",
+    "app/assets/icon.png",
+    "package.json",
+    "node_modules/**/*",
+    "!dist/**/*",
+    "!dist-cr/**/*",
+    "!Entrega/**/*",
+    "!CR/**/*",
+    "!ASD-GNY/**/*",
+    "!RT-CMA-B11878/**/*",
+    "!Extra Info/**/*",
+    "!tools/**/*",
+    "!*.xlsx",
+    "!*.csv",
+    "!*.mdb",
+    "!*.bak"
+  ],
+  "extraMetadata": {
+    "main": "app-cr/main.cjs"
+  },
+  "win": {
+    "signAndEditExecutable": false,
+    "icon": "app/assets/icon.ico",
+    "target": [
+      "nsis"
+    ],
+    "artifactName": "${productName}-${version}.${ext}"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "CR VN Studio",
+    "runAfterFinish": false
+  }
+}

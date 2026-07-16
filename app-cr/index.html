@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CR VN Studio</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">CR / VN / RD</p>
+          <h1>CR VN Studio</h1>
+          <p class="lead">
+            Analiza redes de alimentacion CR o VN a partir de carpetas de caso, paquetes aceptados
+            y reactiedocumenten. La app localiza artefactos clave, resume el origen de los datos
+            y deja el caso preparado para la siguiente automatizacion.
+          </p>
+        </div>
+
+        <div class="hero-stats">
+          <article class="hero-card">
+            <span>Objetivo</span>
+            <strong>Inspeccion y trazabilidad</strong>
+          </article>
+          <article class="hero-card">
+            <span>Salida</span>
+            <strong>Resumen + JSON</strong>
+          </article>
+          <article class="hero-card">
+            <span>App</span>
+            <strong id="appVersion">v0.1.0</strong>
+          </article>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Entrada</p>
+              <h2>Caso CR / VN</h2>
+            </div>
+            <button id="inspectButton" class="button secondary" type="button">Analizar caso</button>
+          </div>
+
+          <div class="form-grid">
+            <div class="field">
+              <span>Carpeta del caso</span>
+              <div class="path-row">
+                <input id="caseFolderPath" type="text" spellcheck="false" placeholder="Selecciona una carpeta dentro de CR">
+                <button id="browseCaseFolderButton" class="button tertiary" type="button">Buscar</button>
+              </div>
+            </div>
+
+            <div class="field field-wide">
+              <span>Manifest de fuentes</span>
+              <div class="path-row">
+                <input id="reportOutputPath" type="text" spellcheck="false" placeholder="Ruta para guardar el manifest de fuentes">
+                <button id="browseReportOutputButton" class="button tertiary" type="button">Guardar como</button>
+              </div>
+            </div>
+
+            <div class="field field-wide">
+              <span>Carpeta salida VN</span>
+              <div class="path-row">
+                <input id="buildOutputRootPath" type="text" spellcheck="false" placeholder="Carpeta donde crear el arbol VN final">
+                <button id="browseBuildOutputRootButton" class="button tertiary" type="button">Buscar</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="action-row">
+            <button id="exportReportButton" class="button primary" type="button">Descubrir fuentes</button>
+            <button id="buildTreeButton" class="button secondary" type="button">Construir arbol VN</button>
+            <button id="openCaseFolderButton" class="button tertiary" type="button">Abrir carpeta</button>
+            <button id="openReportFolderButton" class="button tertiary" type="button" disabled>Abrir salida</button>
+          </div>
+
+          <p id="statusBanner" class="status-banner" data-tone="neutral">
+            Selecciona un caso y pulsa "Analizar caso".
+          </p>
+        </section>
+
+        <section class="panel panel-side">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Lectura rapida</p>
+              <h2>Hallazgos</h2>
+            </div>
+          </div>
+
+          <div class="stat-grid">
+            <article class="stat-card">
+              <span>Paquete base</span>
+              <strong id="packageStatus">Pendiente</strong>
+              <small id="packageDetail">Sin analizar</small>
+            </article>
+
+            <article class="stat-card">
+              <span>Reactiedocumenten</span>
+              <strong id="rdStatus">Pendiente</strong>
+              <small id="rdDetail">Sin analizar</small>
+            </article>
+
+            <article class="stat-card">
+              <span>Fuentes</span>
+              <strong id="sourceStatus">Pendiente</strong>
+              <small id="sourceDetail">Sin analizar</small>
+            </article>
+
+            <article class="stat-card" id="questionCard" data-tone="neutral">
+              <span>Dudas</span>
+              <strong id="questionStatus">Pendiente</strong>
+              <small id="questionDetail">Sin analizar</small>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel panel-summary">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Resumen</p>
+              <h2>Artefactos detectados y plan VN</h2>
+            </div>
+          </div>
+          <div id="summaryOutput" class="summary-output"></div>
+        </section>
+
+        <section class="panel panel-log">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Ejecucion</p>
+              <h2>Log</h2>
+            </div>
+            <button id="clearLogButton" class="button tertiary" type="button">Limpiar</button>
+          </div>
+          <div id="logOutput" class="log-output" aria-live="polite"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>

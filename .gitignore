@@ -1,0 +1,26 @@
+node_modules/
+dist/
+Entrega/
+
+*.generated.mdb
+generated*.mdb
+*.mdb
+*.csv
+*.xlsx
+*.bak
+*.blockmap
+
+ASD-GNY/
+CR/
+RT-CMA-B11878/
+Extra Info/
+
+_analysis_check.json
+_asdgny_analysis.json
+_asdgny_test_current.generated.mdb
+_asdgny_test_fixed.generated.mdb
+_icon_test.png
+_vergunning_main.txt
+_vergunning_tekening.txt
+
+app/__pycache__/

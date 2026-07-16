@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Fiber MDB Generator</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">CTTH Delivery</p>
+          <h1>Fiber MDB Generator</h1>
+          <p class="lead">
+            Selecciona el template, los ficheros FC y BC, y la carpeta del proyecto.
+            La app extrae coordenadas del DWG, fechas de vergunning y genera el MDB final.
+          </p>
+        </div>
+
+        <div class="hero-stats">
+          <article class="hero-card">
+            <span>Motor</span>
+            <strong>PowerShell + Access</strong>
+          </article>
+          <article class="hero-card">
+            <span>Formato</span>
+            <strong>MDB listo para entrega</strong>
+          </article>
+          <article class="hero-card">
+            <span>App</span>
+            <strong id="appVersion">v1.1.7</strong>
+          </article>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Entrada</p>
+              <h2>Rutas del proyecto</h2>
+            </div>
+            <button id="inspectButton" class="button secondary">Revisar carpeta</button>
+          </div>
+
+          <div class="form-grid">
+            <div class="field">
+              <span>Template MDB</span>
+              <div class="path-row">
+                <input id="templatePath" type="text" spellcheck="false" placeholder="Selecciona el template vacío">
+                <button id="browseTemplateButton" class="button tertiary" type="button">Buscar</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <span>FC Excel</span>
+              <div class="path-row">
+                <input id="fcPath" type="text" spellcheck="false" placeholder="Selecciona el fichero FC">
+                <button id="browseFcButton" class="button tertiary" type="button">Buscar</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <span>BC CSV</span>
+              <div class="path-row">
+                <input id="bcPath" type="text" spellcheck="false" placeholder="Selecciona el fichero BC">
+                <button id="browseBcButton" class="button tertiary" type="button">Buscar</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <span>Carpeta del proyecto</span>
+              <div class="path-row">
+                <input id="projectFolderPath" type="text" spellcheck="false" placeholder="Selecciona la carpeta RT-XXX-B12345">
+                <button id="browseProjectFolderButton" class="button tertiary" type="button">Buscar</button>
+              </div>
+            </div>
+
+            <div class="field field-wide">
+              <span>MDB de salida</span>
+              <div class="path-row">
+                <input id="outputPath" type="text" spellcheck="false" placeholder="Selecciona dónde guardar el MDB generado">
+                <button id="browseOutputButton" class="button tertiary" type="button">Guardar como</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="action-row">
+            <button id="generateButton" class="button primary" type="button">Generar MDB</button>
+            <button id="cancelButton" class="button secondary" type="button" disabled>Cancelar</button>
+            <button id="openOutputButton" class="button tertiary" type="button" disabled>Abrir carpeta de salida</button>
+          </div>
+
+          <div class="action-row action-row-tools">
+            <button id="generateCrossCheckButton" class="button tertiary" type="button">Generar Cross Check</button>
+            <button id="inspectConnectionBalanceButton" class="button tertiary" type="button">Revisar balance conexiones</button>
+            <button id="adjustConnectionsButton" class="button secondary" type="button">Ajustar conexiones</button>
+            <button id="fixCustomerDempingsButton" class="button secondary" type="button">Corregir dempings</button>
+            <button id="updateFcButton" class="button secondary" type="button">Actualizar FC</button>
+            <button id="riserButton" class="button secondary" type="button">Riser</button>
+            <button id="glaspoortProjectButton" class="button secondary" type="button">Glaspoort Project</button>
+            <button id="rebuildCustomerComplexesButton" class="button secondary" type="button">Rehacer complex</button>
+            <button id="drawCustomerCoordinatesButton" class="button secondary" type="button">Dibujar coord. clientes</button>
+            <button id="clearCustomerCoordinatesButton" class="button secondary" type="button">Limpiar coord. clientes</button>
+            <button id="extractCustomerCoordinatesButton" class="button secondary" type="button">Extraer coord. clientes</button>
+            <button id="removeExtraRolesButton" class="button secondary" type="button">Contingencia eliminar roles extra</button>
+            <button id="drawAccessnetWithoutAddressButton" class="button secondary" type="button">Contingencia accessnet sin direccion</button>
+            <button id="getOapCoordinateButton" class="button tertiary" type="button">Obtener coordenada OAP</button>
+          </div>
+
+          <p id="statusBanner" class="status-banner" data-tone="neutral">
+            Selecciona los archivos del proyecto y pulsa “Generar MDB”.
+          </p>
+        </section>
+
+        <section class="panel panel-side">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Chequeo</p>
+              <h2>Detección rápida</h2>
+            </div>
+          </div>
+
+          <div class="stat-grid">
+            <article class="stat-card">
+              <span>DWG</span>
+              <strong id="dwgStatus">Pendiente</strong>
+              <small id="dwgDetail">Sin analizar</small>
+            </article>
+
+            <article class="stat-card">
+              <span>Vergunning</span>
+              <strong id="permitStatus">Pendiente</strong>
+              <small id="permitDetail">Sin analizar</small>
+            </article>
+
+            <article class="stat-card">
+              <span>Gebouwen</span>
+              <strong id="buildingStatus">Pendiente</strong>
+              <small id="buildingDetail">Sin analizar</small>
+            </article>
+
+            <article class="stat-card" id="connectionBalanceCard" data-tone="neutral">
+              <span>Conexiones</span>
+              <strong id="connectionBalanceStatus">Pendiente</strong>
+              <small id="connectionBalanceDetail">Sin revisar</small>
+            </article>
+          </div>
+
+          <div class="notice">
+            <h3>Nota de entorno</h3>
+            <p>
+              La app empaqueta la lógica de DWG y PDF, pero para leer Excel y escribir Access el equipo necesita
+              tener disponible el motor de Access/Excel de Microsoft.
+            </p>
+          </div>
+        </section>
+
+        <section class="panel panel-log">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Ejecución</p>
+              <h2>Log en tiempo real</h2>
+            </div>
+            <button id="clearLogButton" class="button tertiary" type="button">Limpiar</button>
+          </div>
+
+          <div id="logOutput" class="log-output" aria-live="polite"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>

@@ -1,0 +1,77 @@
+{
+  "name": "fiber-mdb-generator",
+  "version": "1.1.32",
+  "description": "Desktop app to generate fiber delivery MDB databases from FC, BC, DWG and vergunning inputs.",
+  "author": "OpenAI Codex",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alcorcas/MDB_Gen.git"
+  },
+  "private": true,
+  "main": "app/main.cjs",
+  "scripts": {
+    "extract-dwg": "node ./extract_dwg_accesspoints.mjs",
+    "app:icon": "node ./tools/generate_app_icon.cjs",
+    "app:dev": "powershell.exe -NoProfile -Command \"Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue; & '.\\node_modules\\electron\\dist\\electron.exe' .\"",
+    "app:cr:dev": "powershell.exe -NoProfile -Command \"Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue; & '.\\node_modules\\electron\\dist\\electron.exe' .\\app-cr\\main.cjs\"",
+    "app:dist": "node ./node_modules/electron-builder/cli.js --win dir",
+    "app:package": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\package_app.ps1 -Target all",
+    "app:cr:package": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\package_cr_app.ps1",
+    "app:package:portable": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\package_app.ps1 -Target portable",
+    "app:package:installer": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\package_app.ps1 -Target nsis",
+    "app:package:all": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\package_app.ps1 -Target all"
+  },
+  "dependencies": {
+    "@mlightcad/libredwg-web": "^0.6.6",
+    "csv-parse": "^6.2.1",
+    "pdf-parse": "^2.4.5",
+    "xlsx-populate": "^1.21.0"
+  },
+  "devDependencies": {
+    "electron": "^41.0.4",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "com.cocon.fiber-mdb-generator",
+    "productName": "Fiber MDB Generator",
+    "asar": false,
+    "compression": "store",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*",
+      "!dist/**/*",
+      "!Entrega/**/*",
+      "!ASD-GNY/**/*",
+      "!CR/**/*",
+      "!RT-CMA-B11878/**/*",
+      "!Extra Info/**/*",
+      "!docs/**/*",
+      "!app-cr/**/*",
+      "!tools/**/*",
+      "!*.xlsx",
+      "!*.csv",
+      "!*.mdb",
+      "!*.bak",
+      "!_vergunning_*.txt",
+      "template.mdb"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "icon": "app/assets/icon.ico",
+      "target": [
+        "dir"
+      ],
+      "artifactName": "${productName}-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Fiber MDB Generator",
+      "runAfterFinish": false
+    }
+  }
+}

@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Abriendo Fiber MDB Generator</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg-deep: #102535;
+        --bg-mid: #17445d;
+        --bg-warm: #f0b561;
+        --card: rgba(10, 28, 43, 0.5);
+        --card-border: rgba(255, 255, 255, 0.12);
+        --text: #f7f2e8;
+        --muted: rgba(247, 242, 232, 0.72);
+        --accent: #56ddd8;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        font-family: "Aptos", "Segoe UI Variable Text", "Segoe UI", sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top left, rgba(240, 181, 97, 0.42), transparent 34%),
+          radial-gradient(circle at bottom right, rgba(86, 221, 216, 0.2), transparent 28%),
+          linear-gradient(140deg, var(--bg-deep) 0%, var(--bg-mid) 52%, #0e3148 100%);
+      }
+
+      body::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+        background-size: 30px 30px;
+        mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.45), transparent 82%);
+        pointer-events: none;
+      }
+
+      .shell {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        place-items: center;
+        width: 100%;
+        height: 100%;
+        padding: 24px;
+      }
+
+      .panel {
+        position: relative;
+        width: 100%;
+        max-width: 420px;
+        padding: 28px 28px 24px;
+        border-radius: 28px;
+        background: linear-gradient(180deg, rgba(19, 43, 61, 0.76), rgba(8, 23, 35, 0.72));
+        border: 1px solid var(--card-border);
+        box-shadow: 0 28px 60px rgba(0, 0, 0, 0.26);
+        overflow: hidden;
+      }
+
+      .panel::after {
+        content: "";
+        position: absolute;
+        inset: -30% auto auto -10%;
+        width: 160px;
+        height: 160px;
+        background: radial-gradient(circle, rgba(240, 181, 97, 0.28), transparent 70%);
+        pointer-events: none;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .brand img {
+        width: 72px;
+        height: 72px;
+        border-radius: 20px;
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        font-size: 0.74rem;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: var(--bg-warm);
+      }
+
+      h1 {
+        margin: 0;
+        font-family: "Bahnschrift", "Segoe UI Variable Display", "Segoe UI", sans-serif;
+        font-size: 1.75rem;
+        line-height: 1.05;
+        letter-spacing: 0.01em;
+      }
+
+      .lead {
+        margin: 20px 0 0;
+        line-height: 1.55;
+        color: var(--muted);
+      }
+
+      .meter {
+        margin-top: 22px;
+      }
+
+      .meter-label {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 0.9rem;
+        color: var(--muted);
+      }
+
+      .track {
+        position: relative;
+        margin-top: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.12);
+        overflow: hidden;
+      }
+
+      .bar {
+        position: absolute;
+        inset: 0;
+        width: 38%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #f0b561 0%, #56ddd8 100%);
+        box-shadow: 0 0 18px rgba(86, 221, 216, 0.4);
+        animation: glide 1.6s ease-in-out infinite;
+        transform-origin: left center;
+      }
+
+      .dots {
+        display: inline-flex;
+        gap: 5px;
+        margin-left: 8px;
+        vertical-align: middle;
+      }
+
+      .dots span {
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: var(--accent);
+        opacity: 0.28;
+        animation: blink 1.1s ease-in-out infinite;
+      }
+
+      .dots span:nth-child(2) {
+        animation-delay: 0.15s;
+      }
+
+      .dots span:nth-child(3) {
+        animation-delay: 0.3s;
+      }
+
+      .foot {
+        margin-top: 18px;
+        font-size: 0.84rem;
+        color: rgba(247, 242, 232, 0.58);
+      }
+
+      @keyframes glide {
+        0% {
+          transform: translateX(-16%) scaleX(0.8);
+        }
+
+        50% {
+          transform: translateX(148%) scaleX(1.1);
+        }
+
+        100% {
+          transform: translateX(-16%) scaleX(0.8);
+        }
+      }
+
+      @keyframes blink {
+        0%,
+        100% {
+          opacity: 0.28;
+          transform: translateY(0);
+        }
+
+        50% {
+          opacity: 1;
+          transform: translateY(-1px);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel" aria-live="polite">
+        <div class="brand">
+          <img src="./assets/icon.png" alt="">
+          <div>
+            <p class="eyebrow">CTTH Delivery</p>
+            <h1>Fiber MDB Generator</h1>
+          </div>
+        </div>
+
+        <p class="lead">
+          La aplicación se está abriendo y preparando el entorno de trabajo.
+        </p>
+
+        <div class="meter">
+          <div class="meter-label">
+            <span>Abriendo interfaz</span>
+            <span>
+              Cargando
+              <span class="dots" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+              </span>
+            </span>
+          </div>
+          <div class="track" aria-hidden="true">
+            <div class="bar"></div>
+          </div>
+        </div>
+
+        <p class="foot">Esto tarda unos segundos mientras Electron termina de arrancar.</p>
+      </section>
+    </main>
+  </body>
+</html>
