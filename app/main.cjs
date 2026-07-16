@@ -483,6 +483,38 @@ async function validateDownloadedInstaller(installerPath) {
   return stats.size;
 }
 
+function launchInstaller(installerPath) {
+  return new Promise((resolve, reject) => {
+    const command = [
+      'Start-Process',
+      '-FilePath',
+      `'${String(installerPath).replace(/'/g, "''")}'`
+    ].join(' ');
+
+    const child = spawn('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      command
+    ], {
+      windowsHide: true,
+      stdio: 'ignore'
+    });
+
+    child.on('error', reject);
+    child.on('exit', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(new Error(`Start-Process devolvio codigo ${code ?? 'desconocido'}.`));
+    });
+  });
+}
+
 function findPreferredInstallerAsset(release) {
   const assets = Array.isArray(release?.assets) ? release.assets : [];
   const installerAssets = assets.filter((asset) => /\.exe$/i.test(String(asset?.name ?? '')));
@@ -551,11 +583,8 @@ async function maybeCheckForAppUpdates() {
       await downloadFile(installerAsset.browser_download_url, targetPath);
       const downloadedSize = await validateDownloadedInstaller(targetPath);
       appendRuntimeLog(`update-check download-complete target=${targetPath} size=${downloadedSize}`);
-      const openResult = await shell.openPath(targetPath);
-      appendRuntimeLog(`update-check open-result ${openResult ? `error=${openResult}` : 'ok'}`);
-      if (openResult) {
-        throw new Error(`No se ha podido abrir el instalador descargado: ${openResult}`);
-      }
+      await launchInstaller(targetPath);
+      appendRuntimeLog('update-check launch-installer ok');
       return;
     }
 
