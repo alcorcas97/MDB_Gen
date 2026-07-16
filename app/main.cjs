@@ -43,13 +43,47 @@ function sendGenerationEvent(payload) {
   mainWindow.webContents.send('generation:event', payload);
 }
 
-function sendUpdateEvent(message, level = 'info') {
+function sendUpdateEvent(message, level = 'info', progress = null) {
   appendRuntimeLog(`update-check-ui ${message}`);
   sendGenerationEvent({
     type: 'update',
     level,
     message
   });
+
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+
+  const titlePrefix = level === 'success'
+    ? 'Actualizacion lista'
+    : level === 'error'
+      ? 'Error actualizando'
+      : 'Actualizando';
+  mainWindow.setTitle(`${titlePrefix} - Fiber MDB Generator`);
+
+  if (typeof progress === 'number') {
+    mainWindow.setProgressBar(Math.max(0, Math.min(1, progress)));
+  }
+  else if (level === 'success' || level === 'error' || level === 'warning') {
+    mainWindow.setProgressBar(-1);
+  }
+  else {
+    mainWindow.setProgressBar(2);
+  }
+
+  const safeMessage = JSON.stringify(message);
+  const safeTone = JSON.stringify(level === 'error' ? 'error' : level === 'warning' ? 'warning' : level === 'success' ? 'success' : 'neutral');
+  mainWindow.webContents.executeJavaScript(`
+    (() => {
+      const banner = document.getElementById('statusBanner');
+      if (banner) {
+        banner.textContent = ${safeMessage};
+        banner.dataset.tone = ${safeTone};
+        banner.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    })();
+  `).catch(() => {});
 }
 
 function getProjectMetadataModule() {
@@ -618,7 +652,7 @@ async function maybeCheckForAppUpdates() {
       await downloadFile(installerAsset.browser_download_url, targetPath, {
         onProgress: ({ downloadedBytes, totalBytes, percent }) => {
           if (percent !== null) {
-            sendUpdateEvent(`Descargando actualizacion ${percent}%...`);
+            sendUpdateEvent(`Descargando actualizacion ${percent}%...`, 'info', percent / 100);
             return;
           }
 
