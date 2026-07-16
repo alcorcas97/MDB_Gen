@@ -2301,20 +2301,22 @@ function Build-LasRows {
                 }
             }
 
-            $parkingIndex = 0
+            $usedParkingCassettes = @{}
             foreach ($customer in $segment.Customers) {
-                $parkingIndex++
-                $cassette = [math]::Floor(($parkingIndex - 1) / 12) + 1
-                $position = (($parkingIndex - 1) % 12) + 1
+                $parkingOffset = [int]$customer.Fiber - [int]$segment.MinFiber + 1
+                $cassette = [math]::Floor(($parkingOffset - 1) / 12) + 1
+                $position = (($parkingOffset - 1) % 12) + 1
+                $usedParkingCassettes[[int]$cassette] = $true
 
                 $rows += (New-LasRow -Id $id -Location $segment.DpLabel -SpliceBox $segment.DpLabel -CableA $null -FiberA 0 -Cassette $cassette -Position $position -CassetteType $segment.CassetteType -Gelast 'j' -CableB $customer.CableId -FiberB 2 -Side 'V')
                 $id++
             }
 
-            $usedParkingCassettes = [math]::Ceiling($segment.CustomerCount / 12.0)
-            for ($cassette = $usedParkingCassettes + 1; $cassette -le $segment.SegmentCassettes; $cassette++) {
-                $rows += (New-LasRow -Id $id -Location $segment.DpLabel -SpliceBox $segment.DpLabel -CableA $null -FiberA 0 -Cassette $cassette -Position 1 -CassetteType $segment.CassetteType -Gelast 'j' -CableB $null -FiberB 0 -Side 'V')
-                $id++
+            for ($cassette = 1; $cassette -le $segment.SegmentCassettes; $cassette++) {
+                if (-not $usedParkingCassettes.ContainsKey([int]$cassette)) {
+                    $rows += (New-LasRow -Id $id -Location $segment.DpLabel -SpliceBox $segment.DpLabel -CableA $null -FiberA 0 -Cassette $cassette -Position 1 -CassetteType $segment.CassetteType -Gelast 'j' -CableB $null -FiberB 0 -Side 'V')
+                    $id++
+                }
             }
 
             $offset = 0

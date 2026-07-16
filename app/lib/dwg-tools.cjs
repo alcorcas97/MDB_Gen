@@ -1335,7 +1335,13 @@ async function runAccoreConsoleCommand({
   ];
 
   if (saveDocument) {
+    scriptLines.push('FILEDIA 1');
+    scriptLines.push('CMDECHO 1');
     scriptLines.push('_.QSAVE');
+  }
+  else {
+    scriptLines.push('FILEDIA 1');
+    scriptLines.push('CMDECHO 1');
   }
 
   scriptLines.push('_.QUIT');

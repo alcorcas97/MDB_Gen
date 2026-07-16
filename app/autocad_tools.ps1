@@ -202,6 +202,24 @@ function Convert-VariantPointToArray {
     }
 }
 
+function Set-AutoCadDocumentVariableSafe {
+    param(
+        [__ComObject]$Document,
+        [string]$Name,
+        [object]$Value
+    )
+
+    if ($null -eq $Document) {
+        return
+    }
+
+    try {
+        $Document.SetVariable($Name, $Value)
+    }
+    catch {
+    }
+}
+
 switch ($Mode) {
     'RunOpenDocumentCommand' {
         $resolvedDwgPath = Resolve-NormalizedPath $DwgPath
@@ -261,6 +279,8 @@ switch ($Mode) {
         }
         finally {
             if ($null -ne $document) {
+                Set-AutoCadDocumentVariableSafe -Document $document -Name 'FILEDIA' -Value 1
+                Set-AutoCadDocumentVariableSafe -Document $document -Name 'CMDECHO' -Value 1
                 [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($document)
             }
 
