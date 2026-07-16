@@ -8,117 +8,82 @@
   </head>
   <body>
     <div class="app-shell">
-      <header class="hero">
-        <div class="hero-copy">
-          <p class="eyebrow">CTTH Delivery</p>
+      <header class="topbar">
+        <div class="brand-block">
+          <p class="eyebrow">CTTH delivery suite</p>
           <h1>Fiber MDB Generator</h1>
-          <p class="lead">
-            Selecciona el template, los ficheros FC y BC, y la carpeta del proyecto.
-            La app extrae coordenadas del DWG, fechas de vergunning y genera el MDB final.
-          </p>
+          <p class="lead">Genera, revisa y ajusta la MDB del proyecto desde FC, BC, DWG y vergunning.</p>
         </div>
 
-        <div class="hero-stats">
-          <article class="hero-card">
-            <span>Motor</span>
-            <strong>PowerShell + Access</strong>
-          </article>
-          <article class="hero-card">
-            <span>Formato</span>
-            <strong>MDB listo para entrega</strong>
-          </article>
-          <article class="hero-card">
-            <span>App</span>
-            <strong id="appVersion">v1.1.7</strong>
-          </article>
+        <div class="topbar-actions">
+          <span id="appVersion" class="version-pill">v1.1.44</span>
+          <button id="inspectButton" class="button secondary" type="button">Revisar carpeta</button>
+          <button id="openOutputButton" class="button tertiary" type="button" disabled>Abrir salida</button>
         </div>
       </header>
 
-      <main class="layout">
-        <section class="panel">
+      <main class="workspace">
+        <section class="panel panel-project">
           <div class="panel-head">
             <div>
-              <p class="panel-kicker">Entrada</p>
-              <h2>Rutas del proyecto</h2>
+              <p class="panel-kicker">Proyecto</p>
+              <h2>Rutas de trabajo</h2>
             </div>
-            <button id="inspectButton" class="button secondary">Revisar carpeta</button>
+            <p class="panel-note">Selecciona los origenes y la salida antes de generar.</p>
           </div>
 
           <div class="form-grid">
-            <div class="field">
+            <label class="field">
               <span>Template MDB</span>
               <div class="path-row">
-                <input id="templatePath" type="text" spellcheck="false" placeholder="Selecciona el template vacío">
+                <input id="templatePath" type="text" spellcheck="false" placeholder="Template MDB vacio">
                 <button id="browseTemplateButton" class="button tertiary" type="button">Buscar</button>
               </div>
-            </div>
+            </label>
 
-            <div class="field">
+            <label class="field">
               <span>FC Excel</span>
               <div class="path-row">
-                <input id="fcPath" type="text" spellcheck="false" placeholder="Selecciona el fichero FC">
+                <input id="fcPath" type="text" spellcheck="false" placeholder="Archivo FC del proyecto">
                 <button id="browseFcButton" class="button tertiary" type="button">Buscar</button>
               </div>
-            </div>
+            </label>
 
-            <div class="field">
+            <label class="field">
               <span>BC CSV</span>
               <div class="path-row">
-                <input id="bcPath" type="text" spellcheck="false" placeholder="Selecciona el fichero BC">
+                <input id="bcPath" type="text" spellcheck="false" placeholder="Archivo BC del proyecto">
                 <button id="browseBcButton" class="button tertiary" type="button">Buscar</button>
               </div>
-            </div>
+            </label>
 
-            <div class="field">
+            <label class="field">
               <span>Carpeta del proyecto</span>
               <div class="path-row">
-                <input id="projectFolderPath" type="text" spellcheck="false" placeholder="Selecciona la carpeta RT-XXX-B12345">
+                <input id="projectFolderPath" type="text" spellcheck="false" placeholder="Carpeta RT-XXX-B12345">
                 <button id="browseProjectFolderButton" class="button tertiary" type="button">Buscar</button>
               </div>
-            </div>
+            </label>
 
-            <div class="field field-wide">
+            <label class="field field-wide">
               <span>MDB de salida</span>
               <div class="path-row">
-                <input id="outputPath" type="text" spellcheck="false" placeholder="Selecciona dónde guardar el MDB generado">
+                <input id="outputPath" type="text" spellcheck="false" placeholder="Ruta donde guardar la MDB">
                 <button id="browseOutputButton" class="button tertiary" type="button">Guardar como</button>
               </div>
-            </div>
-          </div>
-
-          <div class="action-row">
-            <button id="generateButton" class="button primary" type="button">Generar MDB</button>
-            <button id="cancelButton" class="button secondary" type="button" disabled>Cancelar</button>
-            <button id="openOutputButton" class="button tertiary" type="button" disabled>Abrir carpeta de salida</button>
-          </div>
-
-          <div class="action-row action-row-tools">
-            <button id="generateCrossCheckButton" class="button tertiary" type="button">Generar Cross Check</button>
-            <button id="inspectConnectionBalanceButton" class="button tertiary" type="button">Revisar balance conexiones</button>
-            <button id="adjustConnectionsButton" class="button secondary" type="button">Ajustar conexiones</button>
-            <button id="fixCustomerDempingsButton" class="button secondary" type="button">Corregir dempings</button>
-            <button id="updateFcButton" class="button secondary" type="button">Actualizar FC</button>
-            <button id="riserButton" class="button secondary" type="button">Riser</button>
-            <button id="glaspoortProjectButton" class="button secondary" type="button">Glaspoort Project</button>
-            <button id="rebuildCustomerComplexesButton" class="button secondary" type="button">Rehacer complex</button>
-            <button id="drawCustomerCoordinatesButton" class="button secondary" type="button">Dibujar coord. clientes</button>
-            <button id="clearCustomerCoordinatesButton" class="button secondary" type="button">Limpiar coord. clientes</button>
-            <button id="extractCustomerCoordinatesButton" class="button secondary" type="button">Extraer coord. clientes</button>
-            <button id="removeExtraRolesButton" class="button secondary" type="button">Contingencia eliminar roles extra</button>
-            <button id="drawAccessnetWithoutAddressButton" class="button secondary" type="button">Contingencia accessnet sin direccion</button>
-            <button id="getOapCoordinateButton" class="button tertiary" type="button">Obtener coordenada OAP</button>
+            </label>
           </div>
 
           <p id="statusBanner" class="status-banner" data-tone="neutral">
-            Selecciona los archivos del proyecto y pulsa “Generar MDB”.
+            Selecciona los archivos del proyecto y pulsa Generar MDB.
           </p>
         </section>
 
-        <section class="panel panel-side">
+        <aside class="panel panel-side">
           <div class="panel-head">
             <div>
-              <p class="panel-kicker">Chequeo</p>
-              <h2>Detección rápida</h2>
+              <p class="panel-kicker">Estado</p>
+              <h2>Lectura rapida</h2>
             </div>
           </div>
 
@@ -149,21 +114,90 @@
           </div>
 
           <div class="notice">
-            <h3>Nota de entorno</h3>
-            <p>
-              La app empaqueta la lógica de DWG y PDF, pero para leer Excel y escribir Access el equipo necesita
-              tener disponible el motor de Access/Excel de Microsoft.
-            </p>
+            <h3>Entorno</h3>
+            <p>Para Excel y Access se usa el motor de Microsoft instalado en el equipo. DWG, checks y contingencias se lanzan desde esta app.</p>
+          </div>
+        </aside>
+
+        <section class="panel panel-actions">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Acciones</p>
+              <h2>Centro de mando</h2>
+            </div>
+            <button id="cancelButton" class="button ghost" type="button" disabled>Cancelar</button>
+          </div>
+
+          <div class="action-board">
+            <article class="action-group action-group-primary">
+              <div class="action-copy">
+                <span>MDB</span>
+                <strong>Crear entrega</strong>
+              </div>
+              <div class="action-buttons">
+                <button id="generateButton" class="button primary" type="button">Generar MDB</button>
+                <button id="generateCrossCheckButton" class="button secondary" type="button">Generar Cross Check</button>
+              </div>
+            </article>
+
+            <article class="action-group">
+              <div class="action-copy">
+                <span>FC / BC</span>
+                <strong>Actualizar datos</strong>
+              </div>
+              <div class="action-buttons">
+                <button id="updateFcButton" class="button secondary" type="button">Actualizar FC</button>
+                <button id="inspectConnectionBalanceButton" class="button tertiary" type="button">Revisar balance</button>
+                <button id="adjustConnectionsButton" class="button tertiary" type="button">Ajustar conexiones</button>
+                <button id="fixCustomerDempingsButton" class="button tertiary" type="button">Corregir dempings</button>
+              </div>
+            </article>
+
+            <article class="action-group">
+              <div class="action-copy">
+                <span>Herramientas</span>
+                <strong>Construccion</strong>
+              </div>
+              <div class="action-buttons">
+                <button id="riserButton" class="button accent" type="button">Riser</button>
+                <button id="glaspoortProjectButton" class="button tertiary" type="button">Glaspoort Project</button>
+                <button id="rebuildCustomerComplexesButton" class="button tertiary" type="button">Rehacer complex</button>
+              </div>
+            </article>
+
+            <article class="action-group">
+              <div class="action-copy">
+                <span>DWG</span>
+                <strong>Coordenadas y checks</strong>
+              </div>
+              <div class="action-buttons">
+                <button id="drawCustomerCoordinatesButton" class="button tertiary" type="button">Dibujar coord. clientes</button>
+                <button id="clearCustomerCoordinatesButton" class="button tertiary" type="button">Limpiar coord. clientes</button>
+                <button id="extractCustomerCoordinatesButton" class="button tertiary" type="button">Extraer coord. clientes</button>
+                <button id="getOapCoordinateButton" class="button tertiary" type="button">Obtener coordenada OAP</button>
+              </div>
+            </article>
+
+            <article class="action-group action-group-warning">
+              <div class="action-copy">
+                <span>Contingencias</span>
+                <strong>Aplicar correcciones</strong>
+              </div>
+              <div class="action-buttons">
+                <button id="removeExtraRolesButton" class="button warning" type="button">Eliminar roles extra</button>
+                <button id="drawAccessnetWithoutAddressButton" class="button warning" type="button">Accessnet sin direccion</button>
+              </div>
+            </article>
           </div>
         </section>
 
         <section class="panel panel-log">
           <div class="panel-head">
             <div>
-              <p class="panel-kicker">Ejecución</p>
-              <h2>Log en tiempo real</h2>
+              <p class="panel-kicker">Ejecucion</p>
+              <h2>Actividad</h2>
             </div>
-            <button id="clearLogButton" class="button tertiary" type="button">Limpiar</button>
+            <button id="clearLogButton" class="button tertiary" type="button">Limpiar log</button>
           </div>
 
           <div id="logOutput" class="log-output" aria-live="polite"></div>
