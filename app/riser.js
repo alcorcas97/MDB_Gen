@@ -152,16 +152,59 @@ function parseHouseInput(value) {
   }
 
   const compact = normalized.replace(/\s+/g, '').toUpperCase();
-  const match = compact.match(/^(\d+)([A-Z0-9-]*)$/);
+  const parts = compact.split('-');
+  const match = parts[0]?.match(/^(\d+)([A-Z]*)$/);
   if (!match) {
+    return null;
+  }
+
+  if (parts.length > 3 || parts.some((part) => part === '')) {
+    return null;
+  }
+
+  const inlineSuffix = match[2] || null;
+  const hyphenSuffix = parts.length >= 2 ? parts[1] : null;
+  const room = parts.length >= 3 ? parts[2] : null;
+
+  if (inlineSuffix && hyphenSuffix) {
     return null;
   }
 
   return {
     houseNumber: match[1],
-    houseSuffix: match[2] || null,
+    houseSuffix: hyphenSuffix || inlineSuffix || null,
+    room,
     compact
   };
+}
+
+function getConnectionAddressKey(connection) {
+  return [
+    normalizePostcode(connection?.Postcode) ?? '',
+    normalizeText(connection?.HouseNumber) ?? '',
+    normalizeText(connection?.HouseSuffix)?.replace(/\s+/g, '').toUpperCase() ?? '',
+    normalizeText(connection?.Room)?.replace(/\s+/g, '').toUpperCase() ?? ''
+  ].join('|');
+}
+
+function getParsedAddressKey(postcode, parsedHouse) {
+  return [
+    normalizePostcode(postcode) ?? '',
+    parsedHouse?.houseNumber ?? '',
+    parsedHouse?.houseSuffix ?? '',
+    parsedHouse?.room ?? ''
+  ].join('|');
+}
+
+function formatAddress(connection) {
+  const parts = [
+    normalizeText(connection?.Postcode),
+    normalizeText(connection?.HouseNumber),
+    normalizeText(connection?.HouseSuffix)?.replace(/\s+/g, '').toUpperCase(),
+    normalizeText(connection?.Room)?.replace(/\s+/g, '').toUpperCase()
+  ].filter(Boolean);
+
+  return parts.join('-');
 }
 
 function buildEmptyTube(index, size = 12) {
@@ -285,7 +328,7 @@ function resolveRow(tubeIndex, rowIndex) {
     return {
       tone: 'error',
       status: 'invalid',
-      message: 'Formato inválido. Usa 24 o 24A.'
+      message: 'Formato invalido. Usa 130, 130H, 130-1 o 130-1-LCM.'
     };
   }
 
@@ -297,15 +340,8 @@ function resolveRow(tubeIndex, rowIndex) {
     };
   }
 
-  const allMatches = (state.data?.Connections ?? []).filter((connection) => {
-    const postcode = normalizePostcode(connection.Postcode);
-    const houseNumber = normalizeText(connection.HouseNumber);
-    const houseSuffix = normalizeText(connection.HouseSuffix)?.replace(/\s+/g, '').toUpperCase() ?? null;
-
-    return postcodes.includes(postcode)
-      && houseNumber === parsedHouse.houseNumber
-      && (houseSuffix ?? '') === (parsedHouse.houseSuffix ?? '');
-  });
+  const expectedKeys = new Set(postcodes.map((postcode) => getParsedAddressKey(postcode, parsedHouse)));
+  const allMatches = (state.data?.Connections ?? []).filter((connection) => expectedKeys.has(getConnectionAddressKey(connection)));
 
   const dpMatches = selectedDp
     ? allMatches.filter((connection) => normalizeText(connection.DpLabel) === selectedDp)
@@ -350,11 +386,53 @@ function resolveRow(tubeIndex, rowIndex) {
   };
 }
 
+function getDuplicateCableIdsByTube() {
+  const duplicatesByTube = new Map();
+
+  for (let tubeIndex = 0; tubeIndex < state.tubes.length; tubeIndex += 1) {
+    const seen = new Set();
+    const duplicates = new Set();
+    const tube = state.tubes[tubeIndex];
+
+    for (let rowIndex = 0; rowIndex < tube.rows.length; rowIndex += 1) {
+      const resolution = resolveRow(tubeIndex, rowIndex);
+      const cableId = normalizeText(resolution.candidate?.CableId);
+      if (!cableId) {
+        continue;
+      }
+
+      const key = cableId.toUpperCase();
+      if (seen.has(key)) {
+        duplicates.add(key);
+        continue;
+      }
+
+      seen.add(key);
+    }
+
+    if (duplicates.size > 0) {
+      duplicatesByTube.set(tubeIndex, duplicates);
+    }
+  }
+
+  return duplicatesByTube;
+}
+
+function isDuplicateCableInTube(tubeIndex, cableId) {
+  const normalizedCableId = normalizeText(cableId)?.toUpperCase();
+  if (!normalizedCableId) {
+    return false;
+  }
+
+  return getDuplicateCableIdsByTube().get(tubeIndex)?.has(normalizedCableId) ?? false;
+}
+
 function computeStats() {
   let usedRows = 0;
   let resolvedRows = 0;
   let ambiguousRows = 0;
   let invalidRows = 0;
+  let duplicateRows = 0;
 
   for (let tubeIndex = 0; tubeIndex < state.tubes.length; tubeIndex += 1) {
     const tube = state.tubes[tubeIndex];
@@ -368,6 +446,9 @@ function computeStats() {
       const resolution = resolveRow(tubeIndex, rowIndex);
       if (resolution.status === 'resolved') {
         resolvedRows += 1;
+        if (isDuplicateCableInTube(tubeIndex, resolution.candidate?.CableId)) {
+          duplicateRows += 1;
+        }
       }
       else if (resolution.status === 'ambiguous') {
         ambiguousRows += 1;
@@ -384,6 +465,7 @@ function computeStats() {
     resolvedRows,
     ambiguousRows,
     invalidRows,
+    duplicateRows,
     etDone
   };
 }
@@ -401,11 +483,11 @@ function updateSummary() {
   elements.sourceCountStatus.textContent = String(connectionCount);
   elements.sourceCountDetail.textContent = `${(state.data?.DpLabels ?? []).length} DP detectados en FC/BC`;
 
-  elements.resolvedCard.dataset.tone = stats.ambiguousRows > 0 || stats.invalidRows > 0 ? 'warning' : stats.usedRows > 0 ? 'success' : 'neutral';
+  elements.resolvedCard.dataset.tone = stats.ambiguousRows > 0 || stats.invalidRows > 0 || stats.duplicateRows > 0 ? 'warning' : stats.usedRows > 0 ? 'success' : 'neutral';
   elements.resolvedCountStatus.textContent = `${stats.resolvedRows}/${stats.usedRows}`;
   elements.resolvedCountDetail.textContent = stats.usedRows === 0
     ? 'Sin casas asignadas todavía'
-    : `${stats.ambiguousRows} ambiguas | ${stats.invalidRows} sin resolver`;
+    : `${stats.ambiguousRows} ambiguas | ${stats.invalidRows} sin resolver | ${stats.duplicateRows} duplicadas`;
 
   elements.etCard.dataset.tone = stats.etDone === state.tubes.length && state.tubes.length > 0 ? 'success' : stats.etDone > 0 ? 'warning' : 'neutral';
   elements.etCountStatus.textContent = `${stats.etDone}/${state.tubes.length}`;
@@ -417,8 +499,9 @@ function updateSummary() {
 function renderTubeRow(tube, tubeIndex, rowIndex, subductLabel) {
   const resolution = resolveRow(tubeIndex, rowIndex);
   const candidate = resolution.candidate ?? null;
+  const isDuplicate = candidate ? isDuplicateCableInTube(tubeIndex, candidate.CableId) : false;
   const mainClass = resolution.status === 'resolved'
-    ? 'success'
+    ? isDuplicate ? 'warning' : 'success'
     : resolution.status === 'ambiguous' || resolution.status === 'missing-postcodes'
       ? 'warning'
       : resolution.status === 'empty'
@@ -431,7 +514,9 @@ function renderTubeRow(tube, tubeIndex, rowIndex, subductLabel) {
 
   if (resolution.status === 'resolved' && candidate) {
     resolveMain = candidate.CableId;
-    resolveDetail = `${candidate.Postcode}-${candidate.HouseNumber}${candidate.HouseSuffix ?? ''} | ${candidate.DpLabel}`;
+    resolveDetail = isDuplicate
+      ? `Duplicado en este tubo | ${formatAddress(candidate)} | ${candidate.DpLabel}`
+      : `${formatAddress(candidate)} | ${candidate.DpLabel}`;
   }
   else if (resolution.status === 'ambiguous') {
     resolveMain = 'Selección manual';
@@ -441,7 +526,7 @@ function renderTubeRow(tube, tubeIndex, rowIndex, subductLabel) {
         <option value="">Elegir Kabel ID...</option>
         ${resolution.candidates.map((item) => `
           <option value="${htmlEscape(item.CableId)}" ${normalizeText(tube.rows[rowIndex].selectedCableId) === normalizeText(item.CableId) ? 'selected' : ''}>
-            ${htmlEscape(item.CableId)} | ${htmlEscape(item.Postcode)}-${htmlEscape(item.HouseNumber)}${htmlEscape(item.HouseSuffix ?? '')}
+            ${htmlEscape(item.CableId)} | ${htmlEscape(formatAddress(item))}
           </option>
         `).join('')}
       </select>
@@ -664,6 +749,14 @@ function validateBeforeApply() {
         return `La posición ${rowIndex + 1} del tubo ${tube.index} no está resuelta todavía.`;
       }
     }
+  }
+
+  const duplicateCableIdsByTube = getDuplicateCableIdsByTube();
+  if (duplicateCableIdsByTube.size > 0) {
+    const duplicateParts = [...duplicateCableIdsByTube.entries()].map(([tubeIndex, cableIds]) => (
+      `tubo ${tubeIndex + 1}: ${[...cableIds].join(', ')}`
+    ));
+    return `Hay KabelID duplicados dentro del mismo tubo (${duplicateParts.join(' | ')}). Corrige la asignacion antes de aplicar.`;
   }
 
   return null;

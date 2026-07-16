@@ -303,7 +303,7 @@ switch ($Mode) {
             }
 
             $document.Utility.Prompt("`nFMDB: $promptMessage ")
-            $point = $document.Utility.GetPoint([System.Type]::Missing, "`n$promptMessage: ")
+            $point = $document.Utility.GetPoint([System.Type]::Missing, ("`n{0}: " -f $promptMessage))
             $pointValues = Convert-VariantPointToArray -Point $point
 
             if ($null -eq $pointValues -or $pointValues.Count -lt 2) {
