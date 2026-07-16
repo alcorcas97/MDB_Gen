@@ -400,7 +400,6 @@ function requestJson(url) {
 
 function downloadFile(url, destinationPath, redirectCount = 0) {
   return new Promise((resolve, reject) => {
-    const fileStream = fs.createWriteStream(destinationPath);
     const request = https.get(url, {
       headers: {
         'User-Agent': 'Fiber-MDB-Generator'
@@ -410,8 +409,6 @@ function downloadFile(url, destinationPath, redirectCount = 0) {
       const location = String(response.headers?.location ?? '').trim();
 
       if (statusCode >= 300 && statusCode < 400 && location) {
-        fileStream.close(() => {});
-        fs.rm(destinationPath, { force: true }, () => {});
         response.resume();
 
         if (redirectCount >= 5) {
@@ -430,14 +427,18 @@ function downloadFile(url, destinationPath, redirectCount = 0) {
       }
 
       if (!response.statusCode || response.statusCode >= 400) {
-        fileStream.close(() => {});
         fs.rm(destinationPath, { force: true }, () => {});
         response.resume();
         reject(new Error(`HTTP ${response.statusCode ?? 'error'} descargando instalador.`));
         return;
       }
 
+      const fileStream = fs.createWriteStream(destinationPath);
       response.pipe(fileStream);
+      fileStream.on('error', (error) => {
+        fs.rm(destinationPath, { force: true }, () => {});
+        reject(error);
+      });
       fileStream.on('finish', () => {
         fileStream.close((error) => {
           if (error) {
@@ -451,7 +452,6 @@ function downloadFile(url, destinationPath, redirectCount = 0) {
     });
 
     request.on('error', (error) => {
-      fileStream.close(() => {});
       fs.rm(destinationPath, { force: true }, () => {});
       reject(error);
     });
