@@ -181,7 +181,9 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     revealMainWindow();
-    void maybeCheckForAppUpdates();
+    setTimeout(() => {
+      void maybeCheckForAppUpdates();
+    }, 1800);
   });
 
   mainWindow.webContents.on('did-fail-load', () => {
@@ -197,6 +199,9 @@ function createWindow() {
 
   mainWindow.webContents.on('did-finish-load', async () => {
     if (!selfTestMode) {
+      setTimeout(() => {
+        void maybeCheckForAppUpdates();
+      }, 2500);
       return;
     }
 
@@ -453,20 +458,25 @@ async function maybeCheckForAppUpdates() {
   updateCheckStarted = true;
   const repositoryFullName = getConfiguredGitHubRepository();
   if (!repositoryFullName || !mainWindow || mainWindow.isDestroyed()) {
+    appendRuntimeLog(`update-check skipped repository=${repositoryFullName ?? 'none'} mainWindow=${Boolean(mainWindow)}`);
     return;
   }
 
   try {
+    appendRuntimeLog(`update-check start repository=${repositoryFullName} current=${app.getVersion()}`);
     const release = await requestJson(`https://api.github.com/repos/${repositoryFullName}/releases/latest`);
     const currentVersion = app.getVersion();
     const latestVersion = normalizeVersionString(release?.tag_name ?? release?.name);
+    const installerAsset = findPreferredInstallerAsset(release);
+
+    appendRuntimeLog(
+      `update-check release current=${currentVersion} latest=${latestVersion} tag=${String(release?.tag_name ?? '')} installer=${String(installerAsset?.name ?? 'none')}`
+    );
 
     if (!latestVersion || compareAppVersions(latestVersion, currentVersion) <= 0) {
       appendRuntimeLog(`update-check no-new-version current=${currentVersion} latest=${latestVersion}`);
       return;
     }
-
-    const installerAsset = findPreferredInstallerAsset(release);
     const response = await dialog.showMessageBox(mainWindow, {
       type: 'info',
       title: 'Nueva versión disponible',
@@ -480,13 +490,17 @@ async function maybeCheckForAppUpdates() {
       noLink: true
     });
 
+    appendRuntimeLog(`update-check prompt-response response=${response.response}`);
+
     if (response.response !== 0) {
       return;
     }
 
     if (installerAsset?.browser_download_url) {
       const targetPath = path.join(os.tmpdir(), installerAsset.name);
+      appendRuntimeLog(`update-check download-start target=${targetPath}`);
       await downloadFile(installerAsset.browser_download_url, targetPath);
+      appendRuntimeLog(`update-check download-complete target=${targetPath}`);
       await shell.openPath(targetPath);
       return;
     }
