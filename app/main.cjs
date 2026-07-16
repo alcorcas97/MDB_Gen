@@ -43,6 +43,15 @@ function sendGenerationEvent(payload) {
   mainWindow.webContents.send('generation:event', payload);
 }
 
+function sendUpdateEvent(message, level = 'info') {
+  appendRuntimeLog(`update-check-ui ${message}`);
+  sendGenerationEvent({
+    type: 'update',
+    level,
+    message
+  });
+}
+
 function getProjectMetadataModule() {
   if (!projectMetadataModule) {
     projectMetadataModule = require('./lib/project-metadata.cjs');
@@ -398,7 +407,7 @@ function requestJson(url) {
   });
 }
 
-function downloadFile(url, destinationPath, redirectCount = 0) {
+function downloadFile(url, destinationPath, options = {}, redirectCount = 0) {
   return new Promise((resolve, reject) => {
     const request = https.get(url, {
       headers: {
@@ -418,7 +427,7 @@ function downloadFile(url, destinationPath, redirectCount = 0) {
 
         try {
           const redirectedUrl = new URL(location, url).toString();
-          resolve(downloadFile(redirectedUrl, destinationPath, redirectCount + 1));
+          resolve(downloadFile(redirectedUrl, destinationPath, options, redirectCount + 1));
         }
         catch (error) {
           reject(error);
@@ -434,6 +443,30 @@ function downloadFile(url, destinationPath, redirectCount = 0) {
       }
 
       const fileStream = fs.createWriteStream(destinationPath);
+      const totalBytes = Number(response.headers?.['content-length'] ?? 0);
+      let downloadedBytes = 0;
+      let lastProgressPercent = -1;
+      let lastProgressAt = 0;
+
+      response.on('data', (chunk) => {
+        downloadedBytes += chunk.length;
+        if (typeof options.onProgress !== 'function') {
+          return;
+        }
+
+        const now = Date.now();
+        const percent = totalBytes > 0
+          ? Math.min(100, Math.floor((downloadedBytes / totalBytes) * 100))
+          : null;
+        const shouldReportByPercent = percent !== null && percent >= lastProgressPercent + 5;
+        const shouldReportByTime = now - lastProgressAt >= 1000;
+
+        if (shouldReportByPercent || shouldReportByTime) {
+          lastProgressPercent = percent ?? lastProgressPercent;
+          lastProgressAt = now;
+          options.onProgress({ downloadedBytes, totalBytes, percent });
+        }
+      });
       response.pipe(fileStream);
       fileStream.on('error', (error) => {
         fs.rm(destinationPath, { force: true }, () => {});
@@ -569,6 +602,7 @@ async function maybeCheckForAppUpdates() {
     appendRuntimeLog(`update-check prompt-response response=${response.response}`);
 
     if (response.response !== 0) {
+      sendUpdateEvent('Actualizacion pospuesta. Puedes instalarla mas tarde al volver a abrir la app.', 'warning');
       return;
     }
 
@@ -579,21 +613,37 @@ async function maybeCheckForAppUpdates() {
       const uniqueSuffix = `${safeVersion}-${Date.now()}`;
       const targetFileName = `${parsedName.name}-${uniqueSuffix}${parsedName.ext || '.exe'}`;
       const targetPath = path.join(os.tmpdir(), targetFileName);
+      sendUpdateEvent(`Descargando Fiber MDB Generator ${latestVersion}...`);
       appendRuntimeLog(`update-check download-start target=${targetPath}`);
-      await downloadFile(installerAsset.browser_download_url, targetPath);
+      await downloadFile(installerAsset.browser_download_url, targetPath, {
+        onProgress: ({ downloadedBytes, totalBytes, percent }) => {
+          if (percent !== null) {
+            sendUpdateEvent(`Descargando actualizacion ${percent}%...`);
+            return;
+          }
+
+          const downloadedMb = (downloadedBytes / 1024 / 1024).toFixed(1);
+          sendUpdateEvent(`Descargando actualizacion ${downloadedMb} MB...`);
+        }
+      });
+      sendUpdateEvent('Validando instalador descargado...');
       const downloadedSize = await validateDownloadedInstaller(targetPath);
       appendRuntimeLog(`update-check download-complete target=${targetPath} size=${downloadedSize}`);
+      sendUpdateEvent('Descarga completada. Abriendo instalador...');
       await launchInstaller(targetPath);
       appendRuntimeLog('update-check launch-installer ok');
+      sendUpdateEvent('Instalador abierto. Si no lo ves, revisa la barra de tareas o el aviso de Windows.', 'success');
       return;
     }
 
     if (release?.html_url) {
+      sendUpdateEvent('Abriendo la pagina de la release en GitHub...');
       await shell.openExternal(release.html_url);
     }
   }
   catch (error) {
     appendRuntimeLog(`update-check-error ${error?.message ?? error}`);
+    sendUpdateEvent(`No se ha podido completar la actualizacion: ${error?.message ?? error}`, 'error');
   }
 }
 

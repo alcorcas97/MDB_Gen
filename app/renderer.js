@@ -1095,6 +1095,19 @@ const removeGenerationListener = fiberDesktopApi
         return;
       }
 
+      if (event.type === 'update') {
+        const tone = event.level === 'error'
+          ? 'error'
+          : event.level === 'warning'
+            ? 'warning'
+            : event.level === 'success'
+              ? 'success'
+              : 'neutral';
+        appendLog(event.message, event.level === 'error' ? 'error' : event.level === 'warning' ? 'warning' : event.level === 'success' ? 'success' : 'meta');
+        setStatus(event.message, tone);
+        return;
+      }
+
       if (event.type === 'progress') {
         setStatus(event.message, 'neutral');
         return;
