@@ -5,7 +5,7 @@
   "author": "OpenAI Codex",
   "repository": {
     "type": "git",
-    "url": "https://github.com/alcorcas/MDB_Gen.git"
+    "url": "https://github.com/alcorcas97/MDB_Gen.git"
   },
   "private": true,
   "main": "app/main.cjs",
