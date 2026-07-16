@@ -427,6 +427,49 @@ function isDuplicateCableInTube(tubeIndex, cableId) {
   return getDuplicateCableIdsByTube().get(tubeIndex)?.has(normalizedCableId) ?? false;
 }
 
+function getNextHouseSlot(tubeIndex, rowIndex) {
+  const slots = [];
+  for (let currentTubeIndex = 0; currentTubeIndex < state.tubes.length; currentTubeIndex += 1) {
+    const tube = state.tubes[currentTubeIndex];
+    for (let currentRowIndex = 0; currentRowIndex < tube.rows.length; currentRowIndex += 1) {
+      slots.push({
+        tubeIndex: currentTubeIndex,
+        rowIndex: currentRowIndex,
+        isEmpty: !normalizeText(tube.rows[currentRowIndex].houseInput)
+      });
+    }
+  }
+
+  const currentSlotIndex = slots.findIndex((slot) => slot.tubeIndex === tubeIndex && slot.rowIndex === rowIndex);
+  if (currentSlotIndex < 0) {
+    return null;
+  }
+
+  const nextEmptySlot = slots.slice(currentSlotIndex + 1).find((slot) => slot.isEmpty);
+  if (nextEmptySlot) {
+    return nextEmptySlot;
+  }
+
+  return slots[currentSlotIndex + 1] ?? null;
+}
+
+function focusHouseSlot(slot) {
+  if (!slot) {
+    elements.applyButton.focus();
+    return;
+  }
+
+  const selector = `input[data-action="house"][data-tube-index="${slot.tubeIndex}"][data-row-index="${slot.rowIndex}"]`;
+  const input = elements.tubeList.querySelector(selector);
+  if (input) {
+    input.focus();
+    input.select();
+    return;
+  }
+
+  elements.applyButton.focus();
+}
+
 function computeStats() {
   let usedRows = 0;
   let resolvedRows = 0;
@@ -930,6 +973,27 @@ function handleTubeListClick(event) {
   }
 }
 
+function handleTubeListKeydown(event) {
+  const target = event.target;
+  if (event.key !== 'Enter' || target?.dataset?.action !== 'house') {
+    return;
+  }
+
+  event.preventDefault();
+
+  const tubeIndex = Number.parseInt(target.dataset.tubeIndex ?? '-1', 10);
+  const rowIndex = Number.parseInt(target.dataset.rowIndex ?? '-1', 10);
+  if (!state.tubes[tubeIndex]?.rows[rowIndex]) {
+    return;
+  }
+
+  state.tubes[tubeIndex].rows[rowIndex].houseInput = target.value;
+  clearRowValidationSuspension(tubeIndex, rowIndex);
+  const nextSlot = getNextHouseSlot(tubeIndex, rowIndex);
+  renderTubes();
+  window.setTimeout(() => focusHouseSlot(nextSlot), 0);
+}
+
 function initializePaths() {
   const query = new URLSearchParams(window.location.search);
   state.fcPath = String(query.get('fcPath') ?? '').trim();
@@ -985,6 +1049,7 @@ elements.dpSelect.addEventListener('change', () => {
 
 elements.tubeList.addEventListener('input', handleTubeListChange);
 elements.tubeList.addEventListener('change', handleTubeListChange);
+elements.tubeList.addEventListener('keydown', handleTubeListKeydown);
 elements.tubeList.addEventListener('focusout', (event) => {
   const target = event.target;
   if (target?.dataset?.action !== 'house') {

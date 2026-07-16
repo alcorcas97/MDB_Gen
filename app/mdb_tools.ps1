@@ -937,6 +937,34 @@ function Test-StartsWithNormalized {
     return $normalizedValue.StartsWith($normalizedPrefix, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+function Clear-AccessTableSavedOrder {
+    param(
+        [__ComObject]$Database,
+        [string]$TableName
+    )
+
+    try {
+        $tableDef = $Database.TableDefs[$TableName]
+        foreach ($propertyName in @('OrderBy', 'Filter')) {
+            try {
+                $tableDef.Properties[$propertyName].Value = ''
+            }
+            catch {
+            }
+        }
+
+        foreach ($propertyName in @('OrderByOn', 'FilterOn')) {
+            try {
+                $tableDef.Properties[$propertyName].Value = $false
+            }
+            catch {
+            }
+        }
+    }
+    catch {
+    }
+}
+
 function Apply-RiserData {
     param(
         [__ComObject]$Database,
@@ -950,7 +978,7 @@ function Apply-RiserData {
     }
 
     $sourceTrajectRows = @($sourceData.TableRows.Traject)
-    $sourceDuctRows = @($sourceData.TableRows.Duct)
+    $sourceDuctRows = @($sourceData.TableRows.Duct | Sort-Object { [int]$_.ID })
     $sourceAccesspointRows = @($sourceData.TableRows.Accesspoint)
     $kabelTypeUpdates = @($sourceData.KabelTypeUpdates)
 
@@ -1030,6 +1058,7 @@ function Apply-RiserData {
     Write-AccessTable -Database $Database -TableName 'Duct' -Rows $targetDuctRows
     Write-AccessTable -Database $Database -TableName 'Accesspoint' -Rows $targetAccesspointRows
     Write-AccessTable -Database $Database -TableName 'Kabel' -Rows $updatedKabelRows
+    Clear-AccessTableSavedOrder -Database $Database -TableName 'Duct'
 
     return [pscustomobject]@{
         dpLabel             = $dpLabel
