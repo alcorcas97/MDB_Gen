@@ -462,6 +462,27 @@ function downloadFile(url, destinationPath, redirectCount = 0) {
   });
 }
 
+async function validateDownloadedInstaller(installerPath) {
+  const stats = await fsp.stat(installerPath);
+  if (!stats.size || stats.size < 1024) {
+    throw new Error(`El instalador descargado es demasiado pequeño (${stats.size} bytes).`);
+  }
+
+  const fileHandle = await fsp.open(installerPath, 'r');
+  try {
+    const header = Buffer.alloc(2);
+    await fileHandle.read(header, 0, header.length, 0);
+    if (header[0] !== 0x4d || header[1] !== 0x5a) {
+      throw new Error('El instalador descargado no es un ejecutable de Windows valido.');
+    }
+  }
+  finally {
+    await fileHandle.close();
+  }
+
+  return stats.size;
+}
+
 function findPreferredInstallerAsset(release) {
   const assets = Array.isArray(release?.assets) ? release.assets : [];
   const installerAssets = assets.filter((asset) => /\.exe$/i.test(String(asset?.name ?? '')));
@@ -520,10 +541,16 @@ async function maybeCheckForAppUpdates() {
     }
 
     if (installerAsset?.browser_download_url) {
-      const targetPath = path.join(os.tmpdir(), installerAsset.name);
+      const baseName = path.basename(String(installerAsset.name ?? 'installer.exe'));
+      const parsedName = path.parse(baseName);
+      const safeVersion = String(latestVersion || 'latest').replace(/[^0-9A-Za-z._-]+/g, '-');
+      const uniqueSuffix = `${safeVersion}-${Date.now()}`;
+      const targetFileName = `${parsedName.name}-${uniqueSuffix}${parsedName.ext || '.exe'}`;
+      const targetPath = path.join(os.tmpdir(), targetFileName);
       appendRuntimeLog(`update-check download-start target=${targetPath}`);
       await downloadFile(installerAsset.browser_download_url, targetPath);
-      appendRuntimeLog(`update-check download-complete target=${targetPath}`);
+      const downloadedSize = await validateDownloadedInstaller(targetPath);
+      appendRuntimeLog(`update-check download-complete target=${targetPath} size=${downloadedSize}`);
       const openResult = await shell.openPath(targetPath);
       appendRuntimeLog(`update-check open-result ${openResult ? `error=${openResult}` : 'ok'}`);
       if (openResult) {
