@@ -78,7 +78,10 @@ const state = {
   data: null,
   tubes: [],
   loading: false,
-  applying: false
+  applying: false,
+  rowValidationTimers: {},
+  rowValidationCooldownMs: 2000,
+  rowValidationSuspendedUntil: {}
 };
 
 function appendLog(message, tone = 'info') {
@@ -212,6 +215,44 @@ function formatCoordinate(coordinate) {
   return `X ${coordinate.x.toFixed(4)} | Y ${coordinate.y.toFixed(4)} | Z ${coordinate.z.toFixed(4)}`;
 }
 
+function getRowKey(tubeIndex, rowIndex) {
+  return `${tubeIndex}:${rowIndex}`;
+}
+
+function suspendRowValidation(tubeIndex, rowIndex) {
+  state.rowValidationSuspendedUntil[getRowKey(tubeIndex, rowIndex)] = Date.now() + state.rowValidationCooldownMs;
+}
+
+function clearRowValidationSuspension(tubeIndex, rowIndex) {
+  const rowKey = getRowKey(tubeIndex, rowIndex);
+  delete state.rowValidationSuspendedUntil[rowKey];
+
+  if (state.rowValidationTimers[rowKey]) {
+    window.clearTimeout(state.rowValidationTimers[rowKey]);
+    delete state.rowValidationTimers[rowKey];
+  }
+}
+
+function scheduleRowValidation(tubeIndex, rowIndex) {
+  const rowKey = getRowKey(tubeIndex, rowIndex);
+
+  if (state.rowValidationTimers[rowKey]) {
+    window.clearTimeout(state.rowValidationTimers[rowKey]);
+  }
+
+  suspendRowValidation(tubeIndex, rowIndex);
+  state.rowValidationTimers[rowKey] = window.setTimeout(() => {
+    delete state.rowValidationTimers[rowKey];
+    delete state.rowValidationSuspendedUntil[rowKey];
+    renderTubes();
+  }, state.rowValidationCooldownMs);
+}
+
+function isRowValidationSuspended(tubeIndex, rowIndex) {
+  const suspendedUntil = state.rowValidationSuspendedUntil[getRowKey(tubeIndex, rowIndex)] ?? 0;
+  return suspendedUntil > Date.now();
+}
+
 function htmlEscape(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -230,6 +271,14 @@ function resolveRow(tubeIndex, rowIndex) {
 
   if (!rowState || !normalizeText(rowState.houseInput)) {
     return { tone: 'neutral', status: 'empty' };
+  }
+
+  if (isRowValidationSuspended(tubeIndex, rowIndex)) {
+    return {
+      tone: 'neutral',
+      status: 'typing',
+      message: 'Escribiendo...'
+    };
   }
 
   if (!parsedHouse) {
@@ -397,6 +446,10 @@ function renderTubeRow(tube, tubeIndex, rowIndex, subductLabel) {
         `).join('')}
       </select>
     `;
+  }
+  else if (resolution.status === 'typing') {
+    resolveMain = 'Escribiendo...';
+    resolveDetail = resolution.message;
   }
   else if (resolution.status === 'missing-postcodes' || resolution.status === 'invalid' || resolution.status === 'not-found') {
     resolveMain = 'Sin resolver';
@@ -756,8 +809,13 @@ function handleTubeListChange(event) {
     state.tubes[tubeIndex].rows[rowIndex].houseInput = target.value;
     if (!normalizeText(target.value)) {
       state.tubes[tubeIndex].rows[rowIndex].selectedCableId = '';
+      clearRowValidationSuspension(tubeIndex, rowIndex);
+      renderTubes();
+      return;
     }
-    renderTubes();
+
+    scheduleRowValidation(tubeIndex, rowIndex);
+    updateSummary();
     return;
   }
 
@@ -834,6 +892,21 @@ elements.dpSelect.addEventListener('change', () => {
 
 elements.tubeList.addEventListener('input', handleTubeListChange);
 elements.tubeList.addEventListener('change', handleTubeListChange);
+elements.tubeList.addEventListener('focusout', (event) => {
+  const target = event.target;
+  if (target?.dataset?.action !== 'house') {
+    return;
+  }
+
+  const tubeIndex = Number.parseInt(target.dataset.tubeIndex ?? '-1', 10);
+  const rowIndex = Number.parseInt(target.dataset.rowIndex ?? '-1', 10);
+  if (tubeIndex < 0 || rowIndex < 0) {
+    return;
+  }
+
+  clearRowValidationSuspension(tubeIndex, rowIndex);
+  renderTubes();
+});
 elements.tubeList.addEventListener('click', handleTubeListClick);
 
 void initialize();

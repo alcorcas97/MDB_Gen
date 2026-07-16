@@ -12,7 +12,6 @@ const DWG_PROGRESS_POLL_MS = 400;
 const DRAW_COMMAND_NAME = 'FIBER_DRAW_CUSTOMERS';
 const EXPORT_COMMAND_NAME = 'FIBER_EXPORT_CUSTOMER_COORDS';
 const CLEAN_COMMAND_NAME = 'FIBER_CLEAR_CUSTOMER_COORDS';
-const PICK_RISER_ET_COMMAND_NAME = 'FIBER_PICK_RISER_ET';
 const REMOVE_EXTRA_ROLES_COMMAND_NAME = 'FIBER_REMOVE_EXTRA_ROLES';
 const DRAW_ACCESSNET_WITHOUT_ADDRESS_COMMAND_NAME = 'FIBER_DRAW_ACCESSNET_WITHOUT_ADDRESS';
 const EXTRA_ROLE_BLOCK_NAME = 'ROL';
@@ -601,45 +600,6 @@ ${buildProgressHelpersLisp(progressFilePath)}
 `;
 }
 
-function buildPickPointLisp({ outputFilePath, progressFilePath, prompt }) {
-  return `(setq fmdb-output-file "${escapeLispString(toAutoLispPath(outputFilePath))}")
-(setq fmdb-pick-prompt "${escapeLispString(prompt || 'Selecciona la coordenada ET del riser')}")
-${buildProgressHelpersLisp(progressFilePath)}
-
-(defun fmdb-format-real (value)
-  (rtos value 2 8)
-)
-
-(defun c:FIBER_PICK_RISER_ET (/ handle pickedPoint zValue)
-  (fmdb-report-stage "pick")
-  (setq pickedPoint (getpoint (strcat "\\n" fmdb-pick-prompt ": ")))
-  (if pickedPoint
-    (progn
-      (setq handle (open fmdb-output-file "w"))
-      (if handle
-        (progn
-          (setq zValue (if (and pickedPoint (caddr pickedPoint)) (caddr pickedPoint) 0.0))
-          (write-line
-            (strcat
-              (fmdb-format-real (car pickedPoint))
-              (chr 9)
-              (fmdb-format-real (cadr pickedPoint))
-              (chr 9)
-              (fmdb-format-real zValue)
-            )
-            handle
-          )
-          (close handle)
-        )
-      )
-    )
-  )
-  (fmdb-report-done "PICK")
-  (princ)
-)
-`;
-}
-
 function buildClearCustomerCoordinatesLisp({ progressFilePath }) {
   return `(setq fmdb-customer-layers '${toLispStringList([...CUSTOMER_LAYER_COLORS.keys()])})
 ${buildProgressHelpersLisp(progressFilePath)}
@@ -1220,6 +1180,29 @@ async function tryRunCommandOnOpenDocument({
   };
 }
 
+async function tryPickPointOnOpenDocument({
+  dwgPath,
+  prompt,
+  timeoutMs
+}) {
+  const timeoutSeconds = Math.max(30, Math.ceil((timeoutMs ?? 300000) / 1000));
+  const result = await runPowerShellFile(autocadToolsScriptPath, [
+    '-Mode',
+    'PickPointOnOpenDocument',
+    '-DwgPath',
+    dwgPath,
+    '-PromptText',
+    String(prompt ?? '')
+  ], {
+    timeoutMs: (timeoutMs ?? 300000) + 15000
+  });
+
+  return parsePowerShellJsonOutput(result.stdout) ?? {
+    handled: false,
+    reason: 'NoHelperResult'
+  };
+}
+
 async function extractCustomerTextCoordinatesFromOpenDocument(dwgPath) {
   const scriptToken = `${path.basename(dwgPath).replace(/[^A-Za-z0-9._-]+/g, '_')}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const lispFilePath = path.join(os.tmpdir(), `fiber-export-customers-${scriptToken}.lsp`);
@@ -1295,32 +1278,11 @@ async function pickPointFromOpenDocument(projectFolderPath, options = {}) {
     throw new Error('No se ha encontrado un DWG en la carpeta del proyecto.');
   }
 
-  const scriptToken = `${path.basename(dwgPath).replace(/[^A-Za-z0-9._-]+/g, '_')}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const lispFilePath = path.join(os.tmpdir(), `fiber-pick-riser-et-${scriptToken}.lsp`);
-  const progressFilePath = path.join(os.tmpdir(), `fiber-pick-riser-et-${scriptToken}.progress`);
-  const outputFilePath = path.join(os.tmpdir(), `fiber-pick-riser-et-${scriptToken}.txt`);
-
   try {
-    await removeFileIfExists(progressFilePath);
-    await removeFileIfExists(outputFilePath);
-    await fsp.writeFile(
-      lispFilePath,
-      buildPickPointLisp({
-        outputFilePath,
-        progressFilePath,
-        prompt: normalizeText(options.prompt) ?? 'Selecciona ET del riser en AutoCAD'
-      }),
-      'utf8'
-    );
-
-    const openDocumentResult = await tryRunCommandOnOpenDocument({
+    const openDocumentResult = await tryPickPointOnOpenDocument({
       dwgPath,
-      lispFilePath,
-      commandName: PICK_RISER_ET_COMMAND_NAME,
-      progressFilePath,
-      outputFilePath,
+      prompt: normalizeText(options.prompt) ?? 'Selecciona ET del riser en AutoCAD',
       timeoutMs: 300000,
-      saveDocument: false
     });
 
     if (!openDocumentResult?.handled) {
@@ -1335,18 +1297,9 @@ async function pickPointFromOpenDocument(projectFolderPath, options = {}) {
       throw new Error('No se ha podido ejecutar la captura del ET sobre el DWG abierto.');
     }
 
-    if (!(await pathExists(outputFilePath))) {
-      throw new Error('No se ha recibido ninguna coordenada desde AutoCAD. Repite la seleccion del ET.');
-    }
-
-    const [xText, yText, zText] = String(await fsp.readFile(outputFilePath, 'utf8'))
-      .replace(/\r/g, '')
-      .trim()
-      .split('\t');
-
-    const x = Number(xText);
-    const y = Number(yText);
-    const z = Number(zText ?? 0);
+    const x = Number(openDocumentResult.x);
+    const y = Number(openDocumentResult.y);
+    const z = Number(openDocumentResult.z ?? 0);
 
     if (!Number.isFinite(x) || !Number.isFinite(y)) {
       throw new Error('La coordenada recibida desde AutoCAD no es valida.');
@@ -1361,9 +1314,6 @@ async function pickPointFromOpenDocument(projectFolderPath, options = {}) {
     };
   }
   finally {
-    await removeFileIfExists(progressFilePath);
-    await removeFileIfExists(outputFilePath);
-    await removeFileIfExists(lispFilePath);
   }
 }
 

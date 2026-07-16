@@ -1,19 +1,18 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('RunOpenDocumentCommand')]
+    [ValidateSet('RunOpenDocumentCommand', 'PickPointOnOpenDocument')]
     [string]$Mode,
 
     [Parameter(Mandatory = $true)]
     [string]$DwgPath,
 
-    [Parameter(Mandatory = $true)]
     [string]$LispPath,
 
-    [Parameter(Mandatory = $true)]
     [string]$CommandName,
 
     [string]$ProgressPath,
     [string]$OutputPath,
+    [string]$PromptText,
     [int]$TimeoutSeconds = 600,
     [switch]$SaveDocument
 )
@@ -184,6 +183,25 @@ function Wait-ForDocumentCommand {
     throw "Tiempo de espera agotado ejecutando '$CommandName' sobre el DWG abierto."
 }
 
+function Convert-VariantPointToArray {
+    param([object]$Point)
+
+    if ($null -eq $Point) {
+        return $null
+    }
+
+    try {
+        if ($Point -is [System.Array]) {
+            return @($Point)
+        }
+
+        return @([double]$Point[0], [double]$Point[1], [double]$Point[2])
+    }
+    catch {
+        return $null
+    }
+}
+
 switch ($Mode) {
     'RunOpenDocumentCommand' {
         $resolvedDwgPath = Resolve-NormalizedPath $DwgPath
@@ -239,6 +257,66 @@ switch ($Mode) {
                 progressPath    = $resolvedProgressPath
                 outputPath      = $resolvedOutputPath
                 saveDocument    = [bool]$SaveDocument
+            } | ConvertTo-Json -Compress
+        }
+        finally {
+            if ($null -ne $document) {
+                [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($document)
+            }
+
+            if ($null -ne $application) {
+                [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($application)
+            }
+        }
+    }
+
+    'PickPointOnOpenDocument' {
+        $resolvedDwgPath = Resolve-NormalizedPath $DwgPath
+        $application = Get-ActiveAutoCadApplication
+        if ($null -eq $application) {
+            [pscustomobject]@{
+                handled = $false
+                reason  = 'AutoCADNotRunning'
+            } | ConvertTo-Json -Compress
+            return
+        }
+
+        $document = $null
+        try {
+            $document = Get-OpenDocumentByPath -Application $application -TargetPath $resolvedDwgPath
+            if ($null -eq $document) {
+                [pscustomobject]@{
+                    handled = $false
+                    reason  = 'DocumentNotOpen'
+                } | ConvertTo-Json -Compress
+                return
+            }
+
+            $document.Activate()
+            Start-Sleep -Milliseconds 250
+
+            $promptMessage = if ([string]::IsNullOrWhiteSpace($PromptText)) {
+                'Selecciona un punto'
+            }
+            else {
+                $PromptText.Trim()
+            }
+
+            $document.Utility.Prompt("`nFMDB: $promptMessage ")
+            $point = $document.Utility.GetPoint([System.Type]::Missing, "`n$promptMessage: ")
+            $pointValues = Convert-VariantPointToArray -Point $point
+
+            if ($null -eq $pointValues -or $pointValues.Count -lt 2) {
+                throw 'No se ha podido leer el punto seleccionado en AutoCAD.'
+            }
+
+            [pscustomobject]@{
+                handled = $true
+                mode    = 'open-document-pick'
+                dwgPath = $resolvedDwgPath
+                x       = [double]$pointValues[0]
+                y       = [double]$pointValues[1]
+                z       = if ($pointValues.Count -ge 3) { [double]$pointValues[2] } else { 0.0 }
             } | ConvertTo-Json -Compress
         }
         finally {
