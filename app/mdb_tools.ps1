@@ -36,6 +36,26 @@ function Normalize-Text {
     return $text
 }
 
+function Get-JsonPropertyValue {
+    param(
+        [object]$Object,
+        [string[]]$Names
+    )
+
+    if ($null -eq $Object) {
+        return $null
+    }
+
+    foreach ($name in $Names) {
+        $property = $Object.PSObject.Properties[$name]
+        if ($null -ne $property) {
+            return $property.Value
+        }
+    }
+
+    return $null
+}
+
 function Normalize-UpperStatus {
     param([object]$Value)
 
@@ -649,8 +669,9 @@ function Apply-DempingContingency {
     $notMatched = @()
 
     foreach ($item in $items) {
-        $klantId = Normalize-Text $item.klantId
-        $kabel = Normalize-Text $item.kabel
+        $klantId = Normalize-Text (Get-JsonPropertyValue -Object $item -Names @('klantId', 'klant_id', 'klantid'))
+        $kabel = Normalize-Text (Get-JsonPropertyValue -Object $item -Names @('kabel', 'Kabel'))
+        $fields = Get-JsonPropertyValue -Object $item -Names @('fields', 'Fields')
         $whereParts = @()
 
         if ($null -ne $klantId) {
@@ -679,11 +700,11 @@ function Apply-DempingContingency {
             $rowChanged = $false
 
             foreach ($fieldName in $allowedFields) {
-                if (-not ($item.fields.PSObject.Properties.Name -contains $fieldName)) {
+                if ($null -eq $fields -or -not ($fields.PSObject.Properties.Name -contains $fieldName)) {
                     continue
                 }
 
-                $targetValue = Convert-ToNullableDouble $item.fields.$fieldName
+                $targetValue = Convert-ToNullableDouble (Get-JsonPropertyValue -Object $fields -Names @($fieldName))
                 if ($null -eq $targetValue) {
                     continue
                 }

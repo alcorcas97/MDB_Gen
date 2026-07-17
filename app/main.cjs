@@ -739,6 +739,18 @@ function normalizeCheckHeader(value) {
     .replace(/[^a-z0-9]/g, '');
 }
 
+function getCheckValue(row, aliases) {
+  for (const alias of aliases) {
+    const normalizedAlias = normalizeCheckHeader(alias);
+    const value = row[normalizedAlias];
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      return value;
+    }
+  }
+
+  return '';
+}
+
 async function findProjectCheckPath(projectFolderPath) {
   const resolvedProjectFolder = path.resolve(String(projectFolderPath ?? '').trim());
   const queue = [resolvedProjectFolder];
@@ -835,10 +847,17 @@ async function extractDempingContingencyItems(projectFolderPath) {
   const items = [];
 
   for (const row of extractRowsFromCheckSection(html, 'M-30212')) {
+    const klantId = getCheckValue(row, ['klant_id', 'klantid', 'klant id']);
+    const kabel = getCheckValue(row, ['kabel']);
+
+    if (!klantId && !kabel) {
+      continue;
+    }
+
     items.push({
       errorCode: 'M-30212',
-      klantId: row.klantid,
-      kabel: row.kabel,
+      klantId,
+      kabel,
       fields: {
         Dempingswaarde1A: 2.2
       }
@@ -847,9 +866,11 @@ async function extractDempingContingencyItems(projectFolderPath) {
 
   for (const row of extractRowsFromCheckSection(html, 'M-30005')) {
     const fields = {};
+    const klantId = getCheckValue(row, ['klant_id', 'klantid', 'klant id']);
+    const kabel = getCheckValue(row, ['kabel']);
 
     for (const [field, accessField] of Object.entries(dempingFieldMap)) {
-      const rawValue = String(row[field] ?? '').trim();
+      const rawValue = String(getCheckValue(row, [field]) ?? '').trim();
       if (!rawValue) {
         continue;
       }
@@ -863,8 +884,8 @@ async function extractDempingContingencyItems(projectFolderPath) {
     if (Object.keys(fields).length > 0) {
       items.push({
         errorCode: 'M-30005',
-        klantId: row.klantid,
-        kabel: row.kabel,
+        klantId,
+        kabel,
         fields
       });
     }
