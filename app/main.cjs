@@ -717,6 +717,167 @@ function validateProjectAndMdbInput(payload) {
   }
 }
 
+function decodeHtmlText(value) {
+  return String(value ?? '')
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_match, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_match, number) => String.fromCharCode(parseInt(number, 10)))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeCheckHeader(value) {
+  return decodeHtmlText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+async function findProjectCheckPath(projectFolderPath) {
+  const resolvedProjectFolder = path.resolve(String(projectFolderPath ?? '').trim());
+  const queue = [resolvedProjectFolder];
+  const candidates = [];
+
+  while (queue.length > 0) {
+    const currentFolder = queue.shift();
+    const entries = await fsp.readdir(currentFolder, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const fullPath = path.join(currentFolder, entry.name);
+
+      if (entry.isDirectory()) {
+        queue.push(fullPath);
+        continue;
+      }
+
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      const lowerName = entry.name.toLowerCase();
+      if (lowerName === 'checks.htm' || lowerName === 'checks.html') {
+        const stats = await fsp.stat(fullPath);
+        candidates.push({ fullPath, mtimeMs: stats.mtimeMs });
+      }
+    }
+  }
+
+  if (candidates.length === 0) {
+    throw new Error('No se ha encontrado ningun Checks.htm o Checks.html dentro de la carpeta del proyecto.');
+  }
+
+  candidates.sort((left, right) => right.mtimeMs - left.mtimeMs);
+  return candidates[0].fullPath;
+}
+
+function extractRowsFromCheckSection(html, code) {
+  const rows = [];
+  const codePattern = code.replace('-', '\\-');
+  const sectionRegex = new RegExp(`${codePattern}[\\s\\S]*?<table[^>]*>([\\s\\S]*?)<\\/table>`, 'gi');
+  let sectionMatch;
+
+  while ((sectionMatch = sectionRegex.exec(html)) !== null) {
+    const tableHtml = sectionMatch[1];
+    const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+    const tableRows = [];
+    let trMatch;
+
+    while ((trMatch = trRegex.exec(tableHtml)) !== null) {
+      const cellRegex = /<(?:th|td)[^>]*>([\s\S]*?)<\/(?:th|td)>/gi;
+      const cells = [];
+      let cellMatch;
+
+      while ((cellMatch = cellRegex.exec(trMatch[1])) !== null) {
+        cells.push(decodeHtmlText(cellMatch[1]));
+      }
+
+      if (cells.length > 0) {
+        tableRows.push(cells);
+      }
+    }
+
+    if (tableRows.length < 2) {
+      continue;
+    }
+
+    const headers = tableRows[0].map(normalizeCheckHeader);
+    for (const cells of tableRows.slice(1)) {
+      const row = {};
+
+      headers.forEach((header, index) => {
+        if (header) {
+          row[header] = cells[index] ?? '';
+        }
+      });
+
+      rows.push(row);
+    }
+  }
+
+  return rows;
+}
+
+async function extractDempingContingencyItems(projectFolderPath) {
+  const checkPath = await findProjectCheckPath(projectFolderPath);
+  const html = await fsp.readFile(checkPath, 'utf8');
+  const dempingFieldMap = {
+    dempingswaarde1a: 'Dempingswaarde1A',
+    dempingswaarde1z: 'Dempingswaarde1Z',
+    dempingswaarde2a: 'Dempingswaarde2A',
+    dempingswaarde2z: 'Dempingswaarde2Z'
+  };
+  const items = [];
+
+  for (const row of extractRowsFromCheckSection(html, 'M-30212')) {
+    items.push({
+      errorCode: 'M-30212',
+      klantId: row.klantid,
+      kabel: row.kabel,
+      fields: {
+        Dempingswaarde1A: 2.2
+      }
+    });
+  }
+
+  for (const row of extractRowsFromCheckSection(html, 'M-30005')) {
+    const fields = {};
+
+    for (const [field, accessField] of Object.entries(dempingFieldMap)) {
+      const rawValue = String(row[field] ?? '').trim();
+      if (!rawValue) {
+        continue;
+      }
+
+      const numericValue = Number(rawValue.replace(',', '.'));
+      if (Number.isFinite(numericValue) && numericValue > 0) {
+        fields[accessField] = -1 * Math.abs(numericValue);
+      }
+    }
+
+    if (Object.keys(fields).length > 0) {
+      items.push({
+        errorCode: 'M-30005',
+        klantId: row.klantid,
+        kabel: row.kabel,
+        fields
+      });
+    }
+  }
+
+  return {
+    checkPath,
+    items,
+    m30212Count: items.filter((item) => item.errorCode === 'M-30212').length,
+    m30005Count: items.filter((item) => item.errorCode === 'M-30005').length
+  };
+}
+
 function validateCrossCheckInput(payload) {
   const missingFields = [];
 
@@ -1287,6 +1448,85 @@ ipcMain.handle('mdb:fix-customer-dempings', async (_event, payload) => {
     updatedRows: result.updatedRows,
     updatedFields: result.updatedFields
   };
+});
+
+ipcMain.handle('mdb:apply-demping-contingency', async (_event, payload) => {
+  if (activeRun) {
+    throw new Error('Ya hay una operacion en curso.');
+  }
+
+  validateProjectAndMdbInput(payload);
+  const workingMdbPath = await resolveProjectWorkingMdbPath(payload.projectFolderPath);
+
+  sendGenerationEvent({
+    type: 'log',
+    level: 'info',
+    message: `MDB de trabajo detectado: ${workingMdbPath}\n`
+  });
+
+  sendGenerationEvent({
+    type: 'status',
+    message: 'Buscando Checks.htm y leyendo errores M-30212 / M-30005...'
+  });
+
+  const contingency = await extractDempingContingencyItems(payload.projectFolderPath);
+
+  if (contingency.items.length === 0) {
+    throw new Error(`No se han encontrado filas M-30212 ni M-30005 con dempings corregibles en ${contingency.checkPath}.`);
+  }
+
+  const assignmentsPath = path.join(
+    os.tmpdir(),
+    `fiber-demping-contingency-${Date.now()}-${Math.random().toString(16).slice(2)}.json`
+  );
+
+  try {
+    await fsp.writeFile(assignmentsPath, JSON.stringify(contingency.items, null, 2), 'utf8');
+
+    sendGenerationEvent({
+      type: 'status',
+      message: 'Aplicando contingencia demping en la tabla Klant...'
+    });
+
+    const result = await runMdbToolsJson([
+      '-Mode',
+      'ApplyDempingContingency',
+      '-MdbPath',
+      workingMdbPath,
+      '-AssignmentsPath',
+      assignmentsPath
+    ]);
+
+    sendGenerationEvent({
+      type: 'log',
+      level: 'info',
+      message: `Check usado: ${contingency.checkPath}\n`
+    });
+
+    sendGenerationEvent({
+      type: 'log',
+      level: 'info',
+      message: `Contingencia demping: M-30212=${contingency.m30212Count}, M-30005=${contingency.m30005Count}. Clientes actualizados=${result.updatedRows}, campos=${result.updatedFields}, no encontrados=${result.notMatchedCount ?? 0}.\n`
+    });
+
+    sendGenerationEvent({
+      type: 'status',
+      message: 'Contingencia demping aplicada correctamente.'
+    });
+
+    return {
+      mdbPath: workingMdbPath,
+      checkPath: contingency.checkPath,
+      m30212Count: contingency.m30212Count,
+      m30005Count: contingency.m30005Count,
+      updatedRows: result.updatedRows,
+      updatedFields: result.updatedFields,
+      notMatchedCount: result.notMatchedCount ?? 0
+    };
+  }
+  finally {
+    await fsp.rm(assignmentsPath, { force: true }).catch(() => {});
+  }
 });
 
 ipcMain.handle('mdb:inspect-connection-balance', async (_event, payload) => {

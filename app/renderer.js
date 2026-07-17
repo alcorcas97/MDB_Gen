@@ -24,6 +24,7 @@ const elements = {
   extractCustomerCoordinatesButton: document.getElementById('extractCustomerCoordinatesButton'),
   removeExtraRolesButton: document.getElementById('removeExtraRolesButton'),
   drawAccessnetWithoutAddressButton: document.getElementById('drawAccessnetWithoutAddressButton'),
+  applyDempingContingencyButton: document.getElementById('applyDempingContingencyButton'),
   getOapCoordinateButton: document.getElementById('getOapCoordinateButton'),
   cancelButton: document.getElementById('cancelButton'),
   openOutputButton: document.getElementById('openOutputButton'),
@@ -132,6 +133,7 @@ function setRunningState(running, cancelAvailable = false) {
     elements.extractCustomerCoordinatesButton,
     elements.removeExtraRolesButton,
     elements.drawAccessnetWithoutAddressButton,
+    elements.applyDempingContingencyButton,
     elements.getOapCoordinateButton
   ]) {
     control.disabled = running;
@@ -934,6 +936,15 @@ async function drawAccessnetWithoutAddress() {
   });
 }
 
+async function applyDempingContingency() {
+  await runProjectTool({
+    startMessage: 'Buscando errores M-30212 y M-30005 en el check...',
+    successMessage: (result) => `Contingencia demping aplicada: ${result.updatedRows} clientes y ${result.updatedFields} campos.`,
+    successLog: (result) => `Contingencia demping completada usando ${result.checkPath}. M-30212: ${result.m30212Count}. M-30005: ${result.m30005Count}. Clientes actualizados: ${result.updatedRows}. Campos tocados: ${result.updatedFields}. No encontrados: ${result.notMatchedCount ?? 0}.`,
+    action: (payload) => fiberDesktopApi.applyDempingContingency(payload)
+  });
+}
+
 async function initialize() {
   if (!fiberDesktopApi) {
     elements.appVersion.textContent = 'IPC error';
@@ -1054,6 +1065,10 @@ elements.removeExtraRolesButton.addEventListener('click', () => {
 
 elements.drawAccessnetWithoutAddressButton.addEventListener('click', () => {
   void drawAccessnetWithoutAddress();
+});
+
+elements.applyDempingContingencyButton.addEventListener('click', () => {
+  void applyDempingContingency();
 });
 
 elements.getOapCoordinateButton.addEventListener('click', () => {

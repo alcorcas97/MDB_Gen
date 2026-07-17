@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('ExportCustomerDrawData', 'ImportCustomerCoordinates', 'SetOapCoordinate', 'ExportCrossCheckData', 'FixCustomerDempingValues', 'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh', 'ApplyGlaspoortProject', 'InspectConnectionBalance', 'ApplyConnectionSync', 'ApplyRiserData')]
+    [ValidateSet('ExportCustomerDrawData', 'ImportCustomerCoordinates', 'SetOapCoordinate', 'ExportCrossCheckData', 'FixCustomerDempingValues', 'ApplyDempingContingency', 'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh', 'ApplyGlaspoortProject', 'InspectConnectionBalance', 'ApplyConnectionSync', 'ApplyRiserData')]
     [string]$Mode,
 
     [Parameter(Mandatory = $true)]
@@ -541,6 +541,102 @@ function Fix-CustomerDempingValues {
     return [pscustomobject]@{
         updatedRows = $updatedRows
         updatedFields = $updatedFields
+    }
+}
+
+function Apply-DempingContingency {
+    param(
+        [__ComObject]$Database,
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "No se ha encontrado el fichero de contingencia demping: $Path"
+    }
+
+    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    $items = @((ConvertFrom-Json -InputObject ($raw -replace '^\uFEFF', '')))
+    $allowedFields = @(
+        'Dempingswaarde1A',
+        'Dempingswaarde1Z',
+        'Dempingswaarde2A',
+        'Dempingswaarde2Z'
+    )
+    $updatedRows = 0
+    $updatedFields = 0
+    $notMatched = @()
+
+    foreach ($item in $items) {
+        $klantId = Normalize-Text $item.klantId
+        $kabel = Normalize-Text $item.kabel
+        $whereParts = @()
+
+        if ($null -ne $klantId) {
+            $whereParts += "[ID] = $([int]$klantId)"
+        }
+
+        if ($null -ne $kabel) {
+            $whereParts += "[Kabel] = $(Convert-ToAccessTextLiteral $kabel)"
+        }
+
+        if ($whereParts.Count -eq 0) {
+            $notMatched += $item
+            continue
+        }
+
+        $sql = "SELECT [ID], [Kabel], [Dempingswaarde1A], [Dempingswaarde1Z], [Dempingswaarde2A], [Dempingswaarde2Z] FROM [Klant] WHERE " + ($whereParts -join ' OR ')
+        $recordset = $Database.OpenRecordset($sql)
+
+        try {
+            if ($recordset.EOF) {
+                $notMatched += $item
+                continue
+            }
+
+            $recordset.Edit()
+            $rowChanged = $false
+
+            foreach ($fieldName in $allowedFields) {
+                if (-not ($item.fields.PSObject.Properties.Name -contains $fieldName)) {
+                    continue
+                }
+
+                $targetValue = Convert-ToNullableDouble $item.fields.$fieldName
+                if ($null -eq $targetValue) {
+                    continue
+                }
+
+                $field = $recordset.Fields($fieldName)
+                $currentValue = Convert-ToNullableDouble $field.Value
+
+                if ($null -ne $currentValue -and [math]::Abs($currentValue - $targetValue) -lt 0.000001) {
+                    continue
+                }
+
+                $field.Value = [double]$targetValue
+                $updatedFields++
+                $rowChanged = $true
+            }
+
+            if ($rowChanged) {
+                $recordset.Update()
+                $updatedRows++
+            }
+            else {
+                $recordset.CancelUpdate()
+            }
+        }
+        finally {
+            $recordset.Close()
+            [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($recordset)
+        }
+    }
+
+    return [pscustomobject]@{
+        updatedRows     = $updatedRows
+        updatedFields   = $updatedFields
+        notMatchedCount = $notMatched.Count
+        requestedRows   = $items.Count
     }
 }
 
@@ -1752,6 +1848,11 @@ try {
 
         'FixCustomerDempingValues' {
             Fix-CustomerDempingValues -Database $context.Database | ConvertTo-Json -Depth 4
+            break
+        }
+
+        'ApplyDempingContingency' {
+            Apply-DempingContingency -Database $context.Database -Path $AssignmentsPath | ConvertTo-Json -Depth 4
             break
         }
 
