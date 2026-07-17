@@ -8,6 +8,7 @@ param(
 
     [string]$CoordinatesPath,
     [string]$AssignmentsPath,
+    [string]$NearestDpLabel,
     [double]$X = 0,
     [double]$Y = 0
 )
@@ -426,11 +427,77 @@ function Set-OapCoordinate {
     param(
         [__ComObject]$Database,
         [double]$XValue,
-        [double]$YValue
+        [double]$YValue,
+        [string]$NearestDpLabel = $null
     )
 
     $updatedPop = 0
     $updatedVergunning = 0
+    $updatedPopAddress = 0
+    $nearestAddress = $null
+    $nearestAddressSource = $null
+    $xSqlValue = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, '{0:R}', $XValue)
+    $ySqlValue = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, '{0:R}', $YValue)
+
+    $customerSql = @"
+SELECT TOP 1
+    [Postcode],
+    [Huisnr],
+    [Toevoeging],
+    [Kabel]
+FROM [Klant]
+WHERE (([X] <> 0) OR ([Y] <> 0))
+ORDER BY ((([X] - $xSqlValue) * ([X] - $xSqlValue)) + (([Y] - $ySqlValue) * ([Y] - $ySqlValue)))
+"@
+    $customerRecordset = $Database.OpenRecordset($customerSql)
+
+    try {
+        if (-not $customerRecordset.EOF) {
+            $nearestAddress = [pscustomobject]@{
+                Postcode   = Normalize-Text $customerRecordset.Fields('Postcode').Value
+                Huisnr     = Normalize-Text $customerRecordset.Fields('Huisnr').Value
+                Toevoeging = Normalize-Text $customerRecordset.Fields('Toevoeging').Value
+                Kabel      = Normalize-Text $customerRecordset.Fields('Kabel').Value
+            }
+            $nearestAddressSource = 'KlantXY'
+        }
+    }
+    finally {
+        $customerRecordset.Close()
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($customerRecordset)
+    }
+
+    $normalizedNearestDpLabel = Normalize-Text $NearestDpLabel
+    if ($null -eq $nearestAddress -and $null -ne $normalizedNearestDpLabel) {
+        $addressSql = @"
+SELECT TOP 1
+    [Klant].[Postcode] AS [Postcode],
+    [Klant].[Huisnr] AS [Huisnr],
+    [Klant].[Toevoeging] AS [Toevoeging],
+    [Klant].[Kabel] AS [Kabel]
+FROM [Klant]
+INNER JOIN [Kabel] ON [Klant].[Kabel] = [Kabel].[Label]
+WHERE [Kabel].[Locatienaam_A] = $(Convert-ToAccessTextLiteral $normalizedNearestDpLabel)
+ORDER BY [Klant].[ID]
+"@
+        $addressRecordset = $Database.OpenRecordset($addressSql)
+
+        try {
+            if (-not $addressRecordset.EOF) {
+                $nearestAddress = [pscustomobject]@{
+                    Postcode   = Normalize-Text $addressRecordset.Fields('Postcode').Value
+                    Huisnr     = Normalize-Text $addressRecordset.Fields('Huisnr').Value
+                    Toevoeging = Normalize-Text $addressRecordset.Fields('Toevoeging').Value
+                    Kabel      = Normalize-Text $addressRecordset.Fields('Kabel').Value
+                }
+                $nearestAddressSource = 'NearestDp'
+            }
+        }
+        finally {
+            $addressRecordset.Close()
+            [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($addressRecordset)
+        }
+    }
 
     foreach ($tableName in @('POP', 'Vergunning')) {
         $recordset = $Database.OpenRecordset("SELECT * FROM [$tableName]")
@@ -440,6 +507,14 @@ function Set-OapCoordinate {
                 $recordset.Edit()
                 $recordset.Fields('X').Value = $XValue
                 $recordset.Fields('Y').Value = $YValue
+
+                if ($tableName -eq 'POP' -and $null -ne $nearestAddress) {
+                    $recordset.Fields('Postcode').Value = $nearestAddress.Postcode
+                    $recordset.Fields('Huisnr').Value = $nearestAddress.Huisnr
+                    $recordset.Fields('Toevoeging').Value = $nearestAddress.Toevoeging
+                    $updatedPopAddress++
+                }
+
                 $recordset.Update()
 
                 if ($tableName -eq 'POP') {
@@ -463,6 +538,13 @@ function Set-OapCoordinate {
         y                  = $YValue
         updatedPop         = $updatedPop
         updatedVergunning  = $updatedVergunning
+        updatedPopAddress  = $updatedPopAddress
+        nearestDpLabel     = $normalizedNearestDpLabel
+        nearestKabel       = if ($null -ne $nearestAddress) { $nearestAddress.Kabel } else { $null }
+        nearestPostcode    = if ($null -ne $nearestAddress) { $nearestAddress.Postcode } else { $null }
+        nearestHuisnr      = if ($null -ne $nearestAddress) { $nearestAddress.Huisnr } else { $null }
+        nearestToevoeging  = if ($null -ne $nearestAddress) { $nearestAddress.Toevoeging } else { $null }
+        nearestSource      = $nearestAddressSource
     }
 }
 
@@ -1837,7 +1919,7 @@ try {
         }
 
         'SetOapCoordinate' {
-            Set-OapCoordinate -Database $context.Database -XValue $X -YValue $Y | ConvertTo-Json -Depth 4
+            Set-OapCoordinate -Database $context.Database -XValue $X -YValue $Y -NearestDpLabel $NearestDpLabel | ConvertTo-Json -Depth 4
             break
         }
 

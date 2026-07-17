@@ -912,8 +912,8 @@ async function extractCustomerCoordinates() {
 async function getOapCoordinate() {
   await runProjectTool({
     startMessage: 'Buscando coordenada OAP en el DWG...',
-    successMessage: (result) => `Coordenada OAP aplicada en POP y Vergunning (${result.x}, ${result.y}).`,
-    successLog: (result) => `OAP actualizado en MDB: X=${result.x}, Y=${result.y}.`,
+    successMessage: (result) => `OAP aplicado en POP y Vergunning (${result.x}, ${result.y}). Direccion POP: ${result.nearestPostcode ?? ''} ${result.nearestHuisnr ?? ''}${result.nearestToevoeging ?? ''}`.trim(),
+    successLog: (result) => `OAP actualizado en MDB: X=${result.x}, Y=${result.y}. DP cercano: ${result.nearestDpLabel ?? 'sin dato'}. Kabel: ${result.nearestKabel ?? 'sin dato'}.`,
     action: (payload) => fiberDesktopApi.getOapCoordinate(payload)
   });
 }

@@ -878,6 +878,41 @@ async function extractDempingContingencyItems(projectFolderPath) {
   };
 }
 
+function resolveNearestCoordinateLabel(coordinates, target) {
+  const targetX = Number(target?.x);
+  const targetY = Number(target?.y);
+
+  if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) {
+    return null;
+  }
+
+  let nearest = null;
+
+  for (const [label, coordinate] of Object.entries(coordinates ?? {})) {
+    const x = Number(coordinate?.x);
+    const y = Number(coordinate?.y);
+
+    if (!label || !Number.isFinite(x) || !Number.isFinite(y)) {
+      continue;
+    }
+
+    if (x === 0 && y === 0) {
+      continue;
+    }
+
+    const distanceSquared = ((x - targetX) ** 2) + ((y - targetY) ** 2);
+
+    if (!nearest || distanceSquared < nearest.distanceSquared) {
+      nearest = {
+        label,
+        distanceSquared
+      };
+    }
+  }
+
+  return nearest;
+}
+
 function validateCrossCheckInput(payload) {
   const missingFields = [];
 
@@ -1092,6 +1127,35 @@ async function exportCrossCheckWorkbook(payload) {
   return {
     mdbPath: result.mdbPath ?? workingMdbPath,
     outputPath: result.outputPath
+  };
+}
+
+async function applyOapCoordinateToMdb({ projectFolderPath, mdbPath, coordinates }) {
+  const { extractOapCoordinate } = getDwgToolsModule();
+  const oapCoordinate = await extractOapCoordinate(projectFolderPath);
+  const nearestCoordinate = resolveNearestCoordinateLabel(coordinates, oapCoordinate);
+  const scriptArgs = [
+    '-Mode',
+    'SetOapCoordinate',
+    '-MdbPath',
+    mdbPath,
+    '-X',
+    String(oapCoordinate.x),
+    '-Y',
+    String(oapCoordinate.y)
+  ];
+
+  if (nearestCoordinate?.label) {
+    scriptArgs.push('-NearestDpLabel', nearestCoordinate.label);
+  }
+
+  const updateResult = await runMdbToolsJson(scriptArgs);
+
+  return {
+    ...updateResult,
+    dwgPath: oapCoordinate.dwgPath,
+    candidateCount: oapCoordinate.candidateCount,
+    nearestDpDistance: nearestCoordinate ? Math.sqrt(nearestCoordinate.distanceSquared) : null
   };
 }
 
@@ -2359,38 +2423,39 @@ ipcMain.handle('dwg:get-oap-coordinate', async (_event, payload) => {
     message: 'Buscando el rectangulo OAP en la layer Opmerking...'
   });
 
-  const { extractOapCoordinate } = getDwgToolsModule();
-  const oapCoordinate = await extractOapCoordinate(payload.projectFolderPath);
-  const updateResult = await runMdbToolsJson([
-    '-Mode',
-    'SetOapCoordinate',
-    '-MdbPath',
-    workingMdbPath,
-    '-X',
-    String(oapCoordinate.x),
-    '-Y',
-    String(oapCoordinate.y)
-  ]);
+  const { extractProjectMetadata } = getProjectMetadataModule();
+  const metadata = await extractProjectMetadata(payload.projectFolderPath);
+  const updateResult = await applyOapCoordinateToMdb({
+    projectFolderPath: payload.projectFolderPath,
+    mdbPath: workingMdbPath,
+    coordinates: metadata.coordinates
+  });
 
   sendGenerationEvent({
     type: 'log',
     level: 'info',
-    message: `OAP localizado en (${oapCoordinate.x}, ${oapCoordinate.y}). POP actualizados: ${updateResult.updatedPop}, Vergunning actualizados: ${updateResult.updatedVergunning}\n`
+    message: `OAP localizado en (${updateResult.x}, ${updateResult.y}). POP actualizados: ${updateResult.updatedPop}, Vergunning actualizados: ${updateResult.updatedVergunning}. DP cercano: ${updateResult.nearestDpLabel ?? 'sin dato'}. Direccion POP: ${updateResult.nearestPostcode ?? ''} ${updateResult.nearestHuisnr ?? ''}${updateResult.nearestToevoeging ?? ''}\n`
   });
 
   sendGenerationEvent({
     type: 'status',
-    message: 'Coordenada OAP aplicada en POP y Vergunning.'
+    message: 'Coordenada OAP y direccion POP aplicadas.'
   });
 
   return {
     mdbPath: workingMdbPath,
-    dwgPath: oapCoordinate.dwgPath,
-    x: oapCoordinate.x,
-    y: oapCoordinate.y,
-    candidateCount: oapCoordinate.candidateCount,
+    dwgPath: updateResult.dwgPath,
+    x: updateResult.x,
+    y: updateResult.y,
+    candidateCount: updateResult.candidateCount,
     updatedPop: updateResult.updatedPop,
-    updatedVergunning: updateResult.updatedVergunning
+    updatedVergunning: updateResult.updatedVergunning,
+    updatedPopAddress: updateResult.updatedPopAddress,
+    nearestDpLabel: updateResult.nearestDpLabel,
+    nearestKabel: updateResult.nearestKabel,
+    nearestPostcode: updateResult.nearestPostcode,
+    nearestHuisnr: updateResult.nearestHuisnr,
+    nearestToevoeging: updateResult.nearestToevoeging
   };
 });
 
@@ -2536,6 +2601,35 @@ ipcMain.handle('generation:run', async (_event, payload) => {
 
     await runGeneratorWithPowerShell(payload, tempMetadataPath);
 
+    let oapSummary = null;
+
+    try {
+      sendGenerationEvent({
+        type: 'status',
+        message: 'Buscando OAP y direccion POP mas cercana...'
+      });
+
+      oapSummary = await applyOapCoordinateToMdb({
+        projectFolderPath: payload.projectFolderPath,
+        mdbPath: payload.outputPath,
+        coordinates: metadata.coordinates
+      });
+
+      sendGenerationEvent({
+        type: 'log',
+        level: 'info',
+        message: `OAP aplicado al generar: (${oapSummary.x}, ${oapSummary.y}). DP cercano: ${oapSummary.nearestDpLabel ?? 'sin dato'}. Direccion POP: ${oapSummary.nearestPostcode ?? ''} ${oapSummary.nearestHuisnr ?? ''}${oapSummary.nearestToevoeging ?? ''}\n`
+      });
+    }
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      sendGenerationEvent({
+        type: 'log',
+        level: 'warning',
+        message: `No se pudo aplicar automaticamente el OAP/direccion POP al generar. Puedes usar el boton "Obtener coordenada OAP" despues. Detalle: ${message}\n`
+      });
+    }
+
     sendGenerationEvent({
       type: 'status',
       message: 'MDB generado correctamente.'
@@ -2548,7 +2642,8 @@ ipcMain.handle('generation:run', async (_event, payload) => {
         permitPdfCount: metadata.diagnostics.permitPdfCount,
         buildingFolderCount: metadata.diagnostics.buildingFolderCount,
         warnings: metadata.diagnostics.warnings
-      }
+      },
+      oapSummary
     };
   }
   finally {
