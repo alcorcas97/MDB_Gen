@@ -791,11 +791,16 @@ async function findProjectCheckPath(projectFolderPath) {
 function extractRowsFromCheckSection(html, code) {
   const rows = [];
   const codePattern = code.replace('-', '\\-');
-  const sectionRegex = new RegExp(`${codePattern}[\\s\\S]*?<table[^>]*>([\\s\\S]*?)<\\/table>`, 'gi');
-  let sectionMatch;
+  const codeRegex = new RegExp(codePattern, 'i');
+  const tableRegex = /<table[^>]*>([\s\S]*?)<\/table>/gi;
+  let tableMatch;
 
-  while ((sectionMatch = sectionRegex.exec(html)) !== null) {
-    const tableHtml = sectionMatch[1];
+  while ((tableMatch = tableRegex.exec(html)) !== null) {
+    const tableHtml = tableMatch[1];
+    if (!codeRegex.test(tableHtml)) {
+      continue;
+    }
+
     const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
     const tableRows = [];
     let trMatch;
