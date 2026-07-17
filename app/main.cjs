@@ -1916,6 +1916,83 @@ ipcMain.handle('mdb:apply-riser-data', async (_event, payload) => {
   }
 });
 
+ipcMain.handle('mdb:create-buiseind', async (_event, payload) => {
+  if (activeRun) {
+    throw new Error('Ya hay una operacion en curso.');
+  }
+
+  validateProjectAndMdbInput(payload);
+
+  const buisNumber = String(payload?.buisNumber ?? '').trim();
+  const coordinate = payload?.coordinate ?? {};
+  const x = Number(coordinate.x);
+  const y = Number(coordinate.y);
+
+  if (!/^\d{2,3}$/.test(buisNumber)) {
+    throw new Error('Numero de Buiseind no valido. Usa valores como B06 o 06.');
+  }
+
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    throw new Error('No se ha recibido una coordenada valida desde AutoCAD.');
+  }
+
+  const workingMdbPath = await resolveProjectWorkingMdbPath(payload.projectFolderPath);
+  const assignmentsPath = path.join(
+    os.tmpdir(),
+    `fiber-buiseind-${Date.now()}-${Math.random().toString(16).slice(2)}.json`
+  );
+
+  await fsp.writeFile(assignmentsPath, JSON.stringify({
+    BuisNumber: buisNumber,
+    X: x,
+    Y: y,
+    Z: Number.isFinite(Number(coordinate.z)) ? Number(coordinate.z) : -60
+  }, null, 2), 'utf8');
+
+  try {
+    sendGenerationEvent({
+      type: 'log',
+      level: 'info',
+      message: `MDB de trabajo detectado: ${workingMdbPath}\n`
+    });
+
+    sendGenerationEvent({
+      type: 'status',
+      message: `Creando Buiseind B${buisNumber} en la MDB...`
+    });
+
+    const result = await runMdbToolsJson([
+      '-Mode',
+      'ApplyBuiseind',
+      '-MdbPath',
+      workingMdbPath,
+      '-AssignmentsPath',
+      assignmentsPath
+    ]);
+
+    sendGenerationEvent({
+      type: 'log',
+      level: 'info',
+      message: `Buiseind creado: ${result.accesspointLabel}. Traject: ${result.trajectLabel}. Duct: ${result.ductLabel}\n`
+    });
+
+    sendGenerationEvent({
+      type: 'status',
+      message: 'Buiseind creado correctamente.'
+    });
+
+    return {
+      ...result,
+      mdbPath: workingMdbPath,
+      x,
+      y
+    };
+  }
+  finally {
+    await fsp.rm(assignmentsPath, { force: true }).catch(() => {});
+  }
+});
+
 ipcMain.handle('mdb:apply-glaspoort-project', async (_event, payload) => {
   if (activeRun) {
     throw new Error('Ya hay una operacion en curso.');

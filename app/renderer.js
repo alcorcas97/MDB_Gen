@@ -17,6 +17,7 @@ const elements = {
   fixCustomerDempingsButton: document.getElementById('fixCustomerDempingsButton'),
   updateFcButton: document.getElementById('updateFcButton'),
   riserButton: document.getElementById('riserButton'),
+  createBuiseindButton: document.getElementById('createBuiseindButton'),
   glaspoortProjectButton: document.getElementById('glaspoortProjectButton'),
   rebuildCustomerComplexesButton: document.getElementById('rebuildCustomerComplexesButton'),
   drawCustomerCoordinatesButton: document.getElementById('drawCustomerCoordinatesButton'),
@@ -126,6 +127,7 @@ function setRunningState(running, cancelAvailable = false) {
     elements.fixCustomerDempingsButton,
     elements.updateFcButton,
     elements.riserButton,
+    elements.createBuiseindButton,
     elements.glaspoortProjectButton,
     elements.rebuildCustomerComplexesButton,
     elements.drawCustomerCoordinatesButton,
@@ -891,6 +893,67 @@ async function openRiserWindow() {
   }
 }
 
+function normalizeBuisNumberInput(value) {
+  const text = String(value ?? '').trim().toUpperCase();
+  const match = text.match(/^(?:B)?(\d{1,3})$/);
+  if (!match) {
+    return null;
+  }
+
+  return match[1].padStart(2, '0');
+}
+
+async function createBuiseind() {
+  if (!fiberDesktopApi) {
+    setStatus('La integracion de escritorio no se ha cargado. No se puede crear Buiseind.', 'error');
+    appendLog('No se puede crear Buiseind: window.fiberApp no esta disponible.', 'error');
+    return;
+  }
+
+  const missing = validateToolInputs();
+  if (missing.length > 0) {
+    const message = `Faltan campos obligatorios: ${missing.join(', ')}.`;
+    setStatus(message, 'warning');
+    appendLog(message, 'warning');
+    return;
+  }
+
+  const buisNumber = normalizeBuisNumberInput(window.prompt('Indica el numero del Buiseind a crear. Ejemplo: B06 o 6'));
+  if (!buisNumber) {
+    setStatus('Creacion de Buiseind cancelada o numero no valido.', 'warning');
+    appendLog('Creacion de Buiseind cancelada: numero no valido.', 'warning');
+    return;
+  }
+
+  setRunningState(true, false);
+  setStatus(`Selecciona en AutoCAD el punto para B${buisNumber}-BE-01...`, 'neutral');
+  appendLog(`Esperando click en AutoCAD para crear Buiseind B${buisNumber}.`, 'meta');
+
+  try {
+    const coordinate = await fiberDesktopApi.pickRiserEtCoordinate({
+      projectFolderPath: elements.projectFolderPath.value.trim(),
+      prompt: `Selecciona B${buisNumber}-BE-01`
+    });
+
+    setStatus('Creando Buiseind en la base de datos...', 'neutral');
+    const result = await fiberDesktopApi.createBuiseind({
+      projectFolderPath: elements.projectFolderPath.value.trim(),
+      buisNumber,
+      coordinate
+    });
+
+    setStatus(`Buiseind creado: ${result.accesspointLabel}.`, 'success');
+    appendLog(`Buiseind creado en ${result.mdbPath}: ${result.accesspointLabel}, ${result.trajectLabel}, duct ${result.ductLabel}.`, 'success');
+  }
+  catch (error) {
+    setStatus(error.message, 'error');
+    appendLog(error.message, 'error');
+  }
+  finally {
+    setRunningState(false);
+  }
+}
+
 async function clearCustomerCoordinates() {
   await runProjectTool({
     startMessage: 'Preparando limpieza de coordenadas de clientes...',
@@ -1037,6 +1100,10 @@ elements.updateFcButton.addEventListener('click', () => {
 
 elements.riserButton.addEventListener('click', () => {
   void openRiserWindow();
+});
+
+elements.createBuiseindButton.addEventListener('click', () => {
+  void createBuiseind();
 });
 
 elements.glaspoortProjectButton.addEventListener('click', () => {

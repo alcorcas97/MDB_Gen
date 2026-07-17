@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('ExportCustomerDrawData', 'ImportCustomerCoordinates', 'SetOapCoordinate', 'ExportCrossCheckData', 'FixCustomerDempingValues', 'ApplyDempingContingency', 'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh', 'ApplyGlaspoortProject', 'InspectConnectionBalance', 'ApplyConnectionSync', 'ApplyRiserData')]
+    [ValidateSet('ExportCustomerDrawData', 'ImportCustomerCoordinates', 'SetOapCoordinate', 'ExportCrossCheckData', 'FixCustomerDempingValues', 'ApplyDempingContingency', 'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh', 'ApplyGlaspoortProject', 'InspectConnectionBalance', 'ApplyConnectionSync', 'ApplyRiserData', 'ApplyBuiseind')]
     [string]$Mode,
 
     [Parameter(Mandatory = $true)]
@@ -1251,6 +1251,113 @@ function Apply-RiserData {
     }
 }
 
+function Test-AccessValueExists {
+    param(
+        [__ComObject]$Database,
+        [string]$TableName,
+        [string]$FieldName,
+        [string]$Value
+    )
+
+    $recordset = $Database.OpenRecordset("SELECT COUNT(*) AS [Cnt] FROM [$TableName] WHERE [$FieldName] = $(Convert-ToAccessTextLiteral $Value)")
+    try {
+        return ([int]$recordset.Fields('Cnt').Value) -gt 0
+    }
+    finally {
+        $recordset.Close()
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($recordset)
+    }
+}
+
+function Get-ProjectLabelFromDatabase {
+    param([__ComObject]$Database)
+
+    $recordset = $Database.OpenRecordset('SELECT TOP 1 [Label] FROM [POP]')
+    try {
+        if (-not $recordset.EOF) {
+            $label = Normalize-Text $recordset.Fields('Label').Value
+            if ($null -ne $label) {
+                return $label
+            }
+        }
+    }
+    finally {
+        $recordset.Close()
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($recordset)
+    }
+
+    throw 'No se ha podido resolver el Label del proyecto desde la tabla POP.'
+}
+
+function Convert-ToAccessNumberLiteral {
+    param([double]$Value)
+
+    return [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, '{0:R}', $Value)
+}
+
+function Apply-Buiseind {
+    param(
+        [__ComObject]$Database,
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "No se ha encontrado el fichero de Buiseind: $Path"
+    }
+
+    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    $sourceData = ConvertFrom-Json -InputObject ($raw -replace '^\uFEFF', '')
+    $projectLabel = Get-ProjectLabelFromDatabase -Database $Database
+    $buisNumber = Normalize-Text $sourceData.BuisNumber
+
+    if ($null -eq $buisNumber -or $buisNumber -notmatch '^\d{2,3}$') {
+        throw 'Numero de Buiseind no valido. Usa valores como B06 o 06.'
+    }
+
+    $xValue = Convert-ToNullableDouble $sourceData.X
+    $yValue = Convert-ToNullableDouble $sourceData.Y
+    if ($null -eq $xValue -or $null -eq $yValue) {
+        throw 'Las coordenadas del Buiseind no son validas.'
+    }
+
+    $accesspointLabel = '{0}-B{1}-BE-01' -f $projectLabel, $buisNumber
+    $trajectLabel = '{0}-T{1}-S01' -f $projectLabel, $buisNumber
+    $ductLabel = '{0}-B{1}-S01' -f $projectLabel, $buisNumber
+
+    if (Test-AccessValueExists -Database $Database -TableName 'Accesspoint' -FieldName 'Label' -Value $accesspointLabel) {
+        throw "Ya existe Accesspoint [$accesspointLabel]."
+    }
+
+    if (Test-AccessValueExists -Database $Database -TableName 'Traject' -FieldName 'Label' -Value $trajectLabel) {
+        throw "Ya existe Traject [$trajectLabel]."
+    }
+
+    if (Test-AccessValueExists -Database $Database -TableName 'Duct' -FieldName 'Duct' -Value $ductLabel) {
+        throw "Ya existe Duct [$ductLabel]."
+    }
+
+    $Database.Execute("INSERT INTO [Accesspoint] ([Label], [Accesspointtype], [X], [Y], [Z], [Nauwkeurigheid]) VALUES ($(Convert-ToAccessTextLiteral $accesspointLabel), $(Convert-ToAccessTextLiteral 'Buiseinde'), $(Convert-ToAccessNumberLiteral ([double]$xValue)), $(Convert-ToAccessNumberLiteral ([double]$yValue)), -60, 0)")
+
+    $Database.Execute("INSERT INTO [Traject] ([Label], [Locatie_A], [Locatie_B], [Nauwkeurigheid]) VALUES ($(Convert-ToAccessTextLiteral $trajectLabel), $(Convert-ToAccessTextLiteral $projectLabel), $(Convert-ToAccessTextLiteral $accesspointLabel), 0)")
+
+    foreach ($subduct in @('RD', 'WT')) {
+        $Database.Execute("INSERT INTO [Duct] ([Duct], [DUCTTYPE], [StandA], [StandB], [DIAMETERDUCT], [Traject], [SubDuct], [DiameterSubDuct]) VALUES ($(Convert-ToAccessTextLiteral $ductLabel), $(Convert-ToAccessTextLiteral '2MK10-DB_WP01'), 0, 0, 22, $(Convert-ToAccessTextLiteral $trajectLabel), $(Convert-ToAccessTextLiteral $subduct), 10)")
+    }
+
+    Clear-AccessTableSavedOrder -Database $Database -TableName 'Duct'
+
+    return [pscustomobject]@{
+        projectLabel = $projectLabel
+        buisNumber = $buisNumber
+        accesspointLabel = $accesspointLabel
+        trajectLabel = $trajectLabel
+        ductLabel = $ductLabel
+        accesspointRowsAdded = 1
+        trajectRowsAdded = 1
+        ductRowsAdded = 2
+    }
+}
+
 function Get-TableRows {
     param(
         [__ComObject]$Database,
@@ -1970,6 +2077,11 @@ try {
 
         'ApplyRiserData' {
             Apply-RiserData -Database $context.Database -Path $AssignmentsPath | ConvertTo-Json -Depth 6
+            break
+        }
+
+        'ApplyBuiseind' {
+            Apply-Buiseind -Database $context.Database -Path $AssignmentsPath | ConvertTo-Json -Depth 6
             break
         }
     }
