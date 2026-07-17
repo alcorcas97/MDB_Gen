@@ -79,6 +79,15 @@ function withoutExtension(fileName) {
   return lastDot > 0 ? fileName.slice(0, lastDot) : fileName;
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function truncateMiddle(value, limit = 64) {
   const text = String(value ?? '');
 
@@ -903,7 +912,64 @@ function normalizeBuisNumberInput(value) {
   return match[1].padStart(2, '0');
 }
 
+function promptTextModal({ title, message, placeholder = '', defaultValue = '' }) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'prompt-overlay';
+    overlay.innerHTML = `
+      <div class="prompt-card" role="dialog" aria-modal="true" aria-labelledby="promptTitle">
+        <h3 id="promptTitle">${escapeHtml(title)}</h3>
+        <p>${escapeHtml(message)}</p>
+        <input class="prompt-input" type="text" value="${escapeHtml(defaultValue)}" placeholder="${escapeHtml(placeholder)}" autocomplete="off" />
+        <div class="prompt-actions">
+          <button class="button tertiary prompt-cancel" type="button">Cancelar</button>
+          <button class="button accent prompt-ok" type="button">Aceptar</button>
+        </div>
+      </div>
+    `;
+
+    const input = overlay.querySelector('.prompt-input');
+    const okButton = overlay.querySelector('.prompt-ok');
+    const cancelButton = overlay.querySelector('.prompt-cancel');
+
+    let settled = false;
+    const close = (value) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      document.removeEventListener('keydown', onKeyDown);
+      overlay.remove();
+      resolve(value);
+    };
+
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        close(null);
+      }
+    };
+
+    okButton.addEventListener('click', () => close(input.value));
+    cancelButton.addEventListener('click', () => close(null));
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        close(input.value);
+      }
+    });
+    document.addEventListener('keydown', onKeyDown);
+    document.body.appendChild(overlay);
+    setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 0);
+  });
+}
+
 async function createBuiseind() {
+  appendLog('Crear Buiseind pulsado. Preparando seleccion de tubo...', 'meta');
+
   if (!fiberDesktopApi) {
     setStatus('La integracion de escritorio no se ha cargado. No se puede crear Buiseind.', 'error');
     appendLog('No se puede crear Buiseind: window.fiberApp no esta disponible.', 'error');
@@ -918,7 +984,12 @@ async function createBuiseind() {
     return;
   }
 
-  const buisNumber = normalizeBuisNumberInput(window.prompt('Indica que tubo/Buis termina en Buiseinde. Ejemplos: B04, T04 o 4'));
+  const buisInput = await promptTextModal({
+    title: 'Crear Buiseind',
+    message: 'Indica que tubo/Buis termina en Buiseinde.',
+    placeholder: 'Ejemplos: B04, T04, T04-S01 o B04-BE-01'
+  });
+  const buisNumber = normalizeBuisNumberInput(buisInput);
   if (!buisNumber) {
     setStatus('Creacion de Buiseind cancelada o tubo no valido.', 'warning');
     appendLog('Creacion de Buiseind cancelada: indica un tubo como B04, T04 o 4.', 'warning');
