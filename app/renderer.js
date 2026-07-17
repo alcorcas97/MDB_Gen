@@ -895,7 +895,7 @@ async function openRiserWindow() {
 
 function normalizeBuisNumberInput(value) {
   const text = String(value ?? '').trim().toUpperCase();
-  const match = text.match(/^(?:B)?(\d{1,3})$/);
+  const match = text.match(/^(?:B|T)?0*(\d{1,3})(?:-(?:S|BE)-?0?\d{1,2})?$/);
   if (!match) {
     return null;
   }
@@ -918,15 +918,16 @@ async function createBuiseind() {
     return;
   }
 
-  const buisNumber = normalizeBuisNumberInput(window.prompt('Indica el numero del Buiseind a crear. Ejemplo: B06 o 6'));
+  const buisNumber = normalizeBuisNumberInput(window.prompt('Indica que tubo/Buis termina en Buiseinde. Ejemplos: B04, T04 o 4'));
   if (!buisNumber) {
-    setStatus('Creacion de Buiseind cancelada o numero no valido.', 'warning');
-    appendLog('Creacion de Buiseind cancelada: numero no valido.', 'warning');
+    setStatus('Creacion de Buiseind cancelada o tubo no valido.', 'warning');
+    appendLog('Creacion de Buiseind cancelada: indica un tubo como B04, T04 o 4.', 'warning');
     return;
   }
 
   setRunningState(true, false);
   setStatus(`Selecciona en AutoCAD el punto para B${buisNumber}-BE-01...`, 'neutral');
+  appendLog(`Tubo seleccionado: B${buisNumber}. Se creara el Buiseind B${buisNumber}-BE-01.`, 'meta');
   appendLog(`Esperando click en AutoCAD para crear Buiseind B${buisNumber}.`, 'meta');
 
   try {

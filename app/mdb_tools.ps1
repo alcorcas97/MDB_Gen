@@ -528,10 +528,13 @@ ORDER BY [Klant].[ID]
                 $recordset.Fields('X').Value = $XValue
                 $recordset.Fields('Y').Value = $YValue
 
-                if ($tableName -eq 'POP' -and $null -ne $nearestAddress) {
-                    $recordset.Fields('Postcode').Value = $nearestAddress.Postcode
-                    $recordset.Fields('Huisnr').Value = $nearestAddress.Huisnr
-                    $recordset.Fields('Toevoeging').Value = $nearestAddress.Toevoeging
+                if ($tableName -eq 'POP') {
+                    if ($null -ne $nearestAddress) {
+                        $recordset.Fields('Postcode').Value = $nearestAddress.Postcode
+                        $recordset.Fields('Huisnr').Value = $nearestAddress.Huisnr
+                    }
+
+                    $recordset.Fields('Toevoeging').Value = 'Nabij'
                     $updatedPopAddress++
                 }
 
@@ -563,7 +566,7 @@ ORDER BY [Klant].[ID]
         nearestKabel       = if ($null -ne $nearestAddress) { $nearestAddress.Kabel } else { $null }
         nearestPostcode    = if ($null -ne $nearestAddress) { $nearestAddress.Postcode } else { $null }
         nearestHuisnr      = if ($null -ne $nearestAddress) { $nearestAddress.Huisnr } else { $null }
-        nearestToevoeging  = if ($null -ne $nearestAddress) { $nearestAddress.Toevoeging } else { $null }
+        nearestToevoeging  = 'Nabij'
         nearestSource      = $nearestAddressSource
     }
 }
