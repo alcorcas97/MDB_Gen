@@ -1,26 +1,26 @@
 :root {
-  color-scheme: light;
-  --bg: #eef2ef;
-  --bg-2: #dce7e2;
-  --ink: #18211f;
-  --muted: #64706c;
-  --quiet: #8a9691;
-  --line: rgba(33, 52, 47, 0.12);
-  --line-strong: rgba(33, 52, 47, 0.2);
-  --panel: rgba(255, 255, 252, 0.92);
-  --panel-solid: #fffffb;
-  --field: #f7faf7;
-  --primary: #0f6b5e;
-  --primary-strong: #084d45;
-  --primary-soft: #dff1ec;
-  --accent: #1f7fbf;
-  --accent-soft: #e2f0fb;
-  --warning: #a95f12;
-  --warning-soft: #fff0d9;
-  --danger: #a23b37;
-  --success: #247451;
-  --shadow-soft: 0 18px 44px rgba(23, 42, 37, 0.10);
-  --shadow-card: 0 8px 24px rgba(23, 42, 37, 0.07);
+  color-scheme: dark;
+  --bg: #10191d;
+  --bg-2: #172a2f;
+  --ink: #edf7f3;
+  --muted: #aabbb5;
+  --quiet: #7f938c;
+  --line: rgba(174, 214, 199, 0.14);
+  --line-strong: rgba(174, 214, 199, 0.24);
+  --panel: rgba(19, 33, 38, 0.86);
+  --panel-solid: #17262c;
+  --field: #0f1c21;
+  --primary: #43c39b;
+  --primary-strong: #1e8f77;
+  --primary-soft: rgba(67, 195, 155, 0.16);
+  --accent: #35a8ff;
+  --accent-soft: rgba(53, 168, 255, 0.17);
+  --warning: #f0ad55;
+  --warning-soft: rgba(240, 173, 85, 0.16);
+  --danger: #ff7f73;
+  --success: #6ee2a5;
+  --shadow-soft: 0 22px 58px rgba(0, 0, 0, 0.34);
+  --shadow-card: 0 10px 28px rgba(0, 0, 0, 0.26);
   --radius-xl: 24px;
   --radius-lg: 18px;
   --radius-md: 12px;
@@ -44,9 +44,10 @@ body {
   font-family: var(--font-ui);
   color: var(--ink);
   background:
-    radial-gradient(circle at 12% 8%, rgba(15, 107, 94, 0.13), transparent 28%),
-    radial-gradient(circle at 92% 18%, rgba(31, 127, 191, 0.10), transparent 30%),
-    linear-gradient(145deg, #f7f4ec 0%, var(--bg) 42%, var(--bg-2) 100%);
+    radial-gradient(circle at 12% 8%, rgba(67, 195, 155, 0.18), transparent 30%),
+    radial-gradient(circle at 92% 18%, rgba(53, 168, 255, 0.18), transparent 32%),
+    radial-gradient(circle at 60% 92%, rgba(240, 173, 85, 0.08), transparent 28%),
+    linear-gradient(145deg, #070d12 0%, var(--bg) 42%, var(--bg-2) 100%);
 }
 
 body::before {
@@ -55,8 +56,8 @@ body::before {
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(24, 33, 31, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(24, 33, 31, 0.035) 1px, transparent 1px);
+    linear-gradient(rgba(174, 214, 199, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(174, 214, 199, 0.045) 1px, transparent 1px);
   background-size: 42px 42px;
   mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.55), transparent 78%);
 }
@@ -84,7 +85,7 @@ input {
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: var(--radius-xl);
-  background: rgba(255, 255, 252, 0.82);
+  background: rgba(18, 31, 36, 0.78);
   box-shadow: var(--shadow-soft);
   backdrop-filter: blur(16px);
 }
@@ -156,8 +157,8 @@ h3 {
   padding: 0 14px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: #f5f8f5;
-  color: var(--primary-strong);
+  background: rgba(67, 195, 155, 0.12);
+  color: #bdf8e3;
   font-weight: 900;
 }
 
@@ -242,7 +243,7 @@ input[type="text"] {
   border-radius: var(--radius-md);
   background: var(--field);
   color: var(--ink);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
   transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
 }
 
@@ -252,9 +253,9 @@ input[type="text"]::placeholder {
 
 input[type="text"]:focus {
   outline: none;
-  border-color: rgba(15, 107, 94, 0.62);
-  background: #fff;
-  box-shadow: 0 0 0 4px rgba(15, 107, 94, 0.12);
+  border-color: rgba(67, 195, 155, 0.72);
+  background: #12252b;
+  box-shadow: 0 0 0 4px rgba(67, 195, 155, 0.14);
 }
 
 .button {
@@ -289,31 +290,32 @@ input[type="text"]:focus {
 
 .button.primary {
   background: linear-gradient(135deg, var(--primary), var(--primary-strong));
-  color: #fff;
+  color: #06120f;
 }
 
 .button.secondary {
   background: var(--primary-soft);
-  border-color: rgba(15, 107, 94, 0.16);
-  color: var(--primary-strong);
+  border-color: rgba(67, 195, 155, 0.24);
+  color: #bdf8e3;
 }
 
 .button.tertiary,
 .button.ghost {
-  background: #f4f7f4;
+  background: rgba(255, 255, 255, 0.055);
   border-color: var(--line);
+  color: var(--ink);
 }
 
 .button.accent {
   background: var(--accent-soft);
-  border-color: rgba(31, 127, 191, 0.2);
-  color: #115982;
+  border-color: rgba(53, 168, 255, 0.25);
+  color: #c7ebff;
 }
 
 .button.warning {
   background: var(--warning-soft);
-  border-color: rgba(169, 95, 18, 0.22);
-  color: #7b4309;
+  border-color: rgba(240, 173, 85, 0.28);
+  color: #ffdca4;
 }
 
 .status-banner {
@@ -321,26 +323,26 @@ input[type="text"]:focus {
   padding: 13px 15px;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  background: #f4f7f4;
+  background: rgba(255, 255, 255, 0.055);
   color: var(--muted);
   line-height: 1.5;
 }
 
 .status-banner[data-tone="success"] {
-  border-color: rgba(36, 116, 81, 0.22);
-  background: rgba(36, 116, 81, 0.10);
+  border-color: rgba(110, 226, 165, 0.26);
+  background: rgba(110, 226, 165, 0.10);
   color: var(--success);
 }
 
 .status-banner[data-tone="warning"] {
-  border-color: rgba(169, 95, 18, 0.25);
-  background: rgba(169, 95, 18, 0.11);
+  border-color: rgba(240, 173, 85, 0.28);
+  background: rgba(240, 173, 85, 0.11);
   color: var(--warning);
 }
 
 .status-banner[data-tone="error"] {
-  border-color: rgba(162, 59, 55, 0.25);
-  background: rgba(162, 59, 55, 0.10);
+  border-color: rgba(255, 127, 115, 0.28);
+  background: rgba(255, 127, 115, 0.10);
   color: var(--danger);
 }
 
@@ -379,21 +381,21 @@ input[type="text"]:focus {
 }
 
 .stat-card[data-tone="success"] {
-  border-color: rgba(36, 116, 81, 0.28);
-  background: linear-gradient(180deg, rgba(36, 116, 81, 0.12), #fff);
+  border-color: rgba(110, 226, 165, 0.28);
+  background: linear-gradient(180deg, rgba(110, 226, 165, 0.13), rgba(23, 38, 44, 0.96));
 }
 
 .stat-card[data-tone="warning"] {
-  border-color: rgba(169, 95, 18, 0.28);
-  background: linear-gradient(180deg, rgba(169, 95, 18, 0.13), #fff);
+  border-color: rgba(240, 173, 85, 0.30);
+  background: linear-gradient(180deg, rgba(240, 173, 85, 0.14), rgba(23, 38, 44, 0.96));
 }
 
 .notice {
   margin-top: 14px;
   padding: 15px;
-  border: 1px dashed rgba(15, 107, 94, 0.25);
+  border: 1px dashed rgba(67, 195, 155, 0.28);
   border-radius: var(--radius-lg);
-  background: rgba(223, 241, 236, 0.65);
+  background: rgba(67, 195, 155, 0.10);
 }
 
 .notice p {
@@ -419,13 +421,13 @@ input[type="text"]:focus {
 }
 
 .action-group-primary {
-  background: linear-gradient(145deg, rgba(15, 107, 94, 0.12), #fff 56%);
-  border-color: rgba(15, 107, 94, 0.20);
+  background: linear-gradient(145deg, rgba(67, 195, 155, 0.14), rgba(23, 38, 44, 0.96) 58%);
+  border-color: rgba(67, 195, 155, 0.24);
 }
 
 .action-group-warning {
-  background: linear-gradient(145deg, rgba(169, 95, 18, 0.12), #fff 58%);
-  border-color: rgba(169, 95, 18, 0.20);
+  background: linear-gradient(145deg, rgba(240, 173, 85, 0.14), rgba(23, 38, 44, 0.96) 58%);
+  border-color: rgba(240, 173, 85, 0.24);
 }
 
 .action-copy {
@@ -455,11 +457,11 @@ input[type="text"]:focus {
   max-height: 520px;
   overflow: auto;
   padding: 16px;
-  border: 1px solid rgba(8, 77, 69, 0.3);
+  border: 1px solid rgba(67, 195, 155, 0.24);
   border-radius: var(--radius-lg);
   background:
-    linear-gradient(180deg, rgba(19, 31, 29, 0.96), rgba(11, 20, 19, 0.98)),
-    #101816;
+    linear-gradient(180deg, rgba(11, 24, 30, 0.98), rgba(6, 13, 17, 0.99)),
+    #081015;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
@@ -511,7 +513,7 @@ input[type="text"]:focus {
   border: 1px solid rgba(134, 188, 165, 0.28);
   border-radius: 22px;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.46);
-  color: var(--text);
+  color: var(--ink);
   display: grid;
   gap: 14px;
   max-width: 460px;
@@ -536,7 +538,7 @@ input[type="text"]:focus {
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 14px;
-  color: var(--text);
+  color: var(--ink);
   font: inherit;
   outline: none;
   padding: 13px 14px;
