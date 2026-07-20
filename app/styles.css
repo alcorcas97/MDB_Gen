@@ -318,6 +318,12 @@ input[type="text"]:focus {
   color: #ffdca4;
 }
 
+.button.danger {
+  background: rgba(255, 127, 115, 0.14);
+  border-color: rgba(255, 127, 115, 0.32);
+  color: #ffc5bf;
+}
+
 .status-banner {
   margin: 16px 0 0;
   padding: 13px 15px;

@@ -1261,6 +1261,34 @@ async function exportRiserData(payload, outputPath) {
   ]);
 }
 
+async function loadExistingRiserState(projectFolderPath) {
+  try {
+    const workingMdbPath = await resolveProjectWorkingMdbPath(projectFolderPath);
+    const result = await runMdbToolsJson([
+      '-Mode',
+      'ExportRiserState',
+      '-MdbPath',
+      workingMdbPath
+    ]);
+
+    return {
+      mdbPath: workingMdbPath,
+      risers: Array.isArray(result?.Risers) ? result.Risers : []
+    };
+  }
+  catch {
+    return {
+      mdbPath: null,
+      risers: []
+    };
+  }
+}
+
+async function writeRiserAssignments(payload, assignmentsPath, tableRows) {
+  const dpLabel = String(payload?.dpLabel ?? '').trim();
+  await writeRiserAssignments(payload, assignmentsPath, tableRows);
+}
+
 async function analyzeAmbiguousInternalDpsWithPowerShell(payload, metadataPath) {
   const analysisPath = path.join(
     os.tmpdir(),
@@ -1492,7 +1520,13 @@ ipcMain.handle('riser:load-data', async (_event, payload) => {
   try {
     await exportRiserData(payload, riserDataPath);
     const raw = await fsp.readFile(riserDataPath, 'utf8');
-    return JSON.parse(raw.replace(/^\uFEFF/, ''));
+    const data = JSON.parse(raw.replace(/^\uFEFF/, ''));
+    const existingState = await loadExistingRiserState(payload.projectFolderPath);
+    return {
+      ...data,
+      ExistingRisers: existingState.risers,
+      ExistingRiserMdbPath: existingState.mdbPath
+    };
   }
   finally {
     await fsp.rm(riserDataPath, { force: true }).catch(() => {});
@@ -2030,6 +2064,91 @@ ipcMain.handle('mdb:apply-riser-data', async (_event, payload) => {
     const result = await runMdbToolsJson([
       '-Mode',
       'ApplyRiserData',
+      '-MdbPath',
+      workingMdbPath,
+      '-AssignmentsPath',
+      assignmentsPath
+    ]);
+
+    return {
+      ...result,
+      mdbPath: workingMdbPath
+    };
+  }
+  finally {
+    await fsp.rm(assignmentsPath, { force: true }).catch(() => {});
+  }
+});
+
+ipcMain.handle('mdb:add-riser-data', async (_event, payload) => {
+  if (activeRun) {
+    throw new Error('Ya hay una operacion en curso.');
+  }
+
+  validateCrossCheckInput(payload);
+
+  const dpLabel = String(payload?.dpLabel ?? '').trim();
+  const tableRows = payload?.tableRows ?? null;
+  if (!dpLabel) {
+    throw new Error('Falta el DP del riser.');
+  }
+
+  if (!tableRows || !Array.isArray(tableRows.Traject) || !Array.isArray(tableRows.Duct) || !Array.isArray(tableRows.Accesspoint)) {
+    throw new Error('Los datos del riser no tienen el formato esperado.');
+  }
+
+  const workingMdbPath = await resolveProjectWorkingMdbPath(payload.projectFolderPath);
+  const assignmentsPath = path.join(
+    os.tmpdir(),
+    `fiber-riser-add-${Date.now()}-${Math.random().toString(16).slice(2)}.json`
+  );
+
+  await writeRiserAssignments(payload, assignmentsPath, tableRows);
+
+  try {
+    const result = await runMdbToolsJson([
+      '-Mode',
+      'AddRiserData',
+      '-MdbPath',
+      workingMdbPath,
+      '-AssignmentsPath',
+      assignmentsPath
+    ]);
+
+    return {
+      ...result,
+      mdbPath: workingMdbPath
+    };
+  }
+  finally {
+    await fsp.rm(assignmentsPath, { force: true }).catch(() => {});
+  }
+});
+
+ipcMain.handle('mdb:delete-riser-data', async (_event, payload) => {
+  if (activeRun) {
+    throw new Error('Ya hay una operacion en curso.');
+  }
+
+  validateCrossCheckInput(payload);
+
+  const dpLabel = String(payload?.dpLabel ?? '').trim();
+  if (!dpLabel) {
+    throw new Error('Falta el DP del riser.');
+  }
+
+  const workingMdbPath = await resolveProjectWorkingMdbPath(payload.projectFolderPath);
+  const assignmentsPath = path.join(
+    os.tmpdir(),
+    `fiber-riser-delete-${Date.now()}-${Math.random().toString(16).slice(2)}.json`
+  );
+
+  await fsp.writeFile(assignmentsPath, JSON.stringify({ DpLabel: dpLabel }, null, 2), 'utf8');
+
+  try {
+    const result = await runMdbToolsJson([
+      '-Mode',
+      'DeleteRiserData',
       '-MdbPath',
       workingMdbPath,
       '-AssignmentsPath',

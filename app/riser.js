@@ -11,6 +11,8 @@ const elements = {
   reloadButton: document.getElementById('reloadButton'),
   resetButton: document.getElementById('resetButton'),
   applyButton: document.getElementById('applyButton'),
+  addEtButton: document.getElementById('addEtButton'),
+  deleteButton: document.getElementById('deleteButton'),
   tubeList: document.getElementById('tubeList'),
   sourceCountStatus: document.getElementById('sourceCountStatus'),
   sourceCountDetail: document.getElementById('sourceCountDetail'),
@@ -79,6 +81,8 @@ const state = {
   tubes: [],
   loading: false,
   applying: false,
+  adding: false,
+  deleting: false,
   rowValidationTimers: {},
   rowValidationCooldownMs: 2000,
   rowValidationSuspendedUntil: {}
@@ -107,7 +111,9 @@ function setBusyState(isBusy) {
   state.loading = isBusy;
   elements.reloadButton.disabled = isBusy;
   elements.resetButton.disabled = isBusy;
-  elements.applyButton.disabled = isBusy || state.applying;
+  elements.applyButton.disabled = isBusy || state.applying || state.adding || state.deleting;
+  elements.addEtButton.disabled = isBusy || state.applying || state.adding || state.deleting;
+  elements.deleteButton.disabled = isBusy || state.applying || state.adding || state.deleting;
   elements.dpSelect.disabled = isBusy;
   elements.tubeCountInput.disabled = isBusy;
   elements.postcodeInput.disabled = isBusy;
@@ -128,6 +134,31 @@ function normalizePostcode(value) {
 
 function getSelectedDpLabel() {
   return normalizeText(elements.dpSelect.value);
+}
+
+function getExistingRiserForDp(dpLabel) {
+  const normalizedDp = normalizeText(dpLabel);
+  if (!normalizedDp) {
+    return null;
+  }
+
+  return (state.data?.ExistingRisers ?? []).find((item) => normalizeText(item?.DpLabel) === normalizedDp) ?? null;
+}
+
+function getNextTubeNumberForDp(dpLabel) {
+  const existingRiser = getExistingRiserForDp(dpLabel);
+  const explicitNext = Number.parseInt(existingRiser?.NextTubeNumber ?? '1', 10);
+  if (Number.isFinite(explicitNext) && explicitNext > 0) {
+    return explicitNext;
+  }
+
+  const tubeNumbers = Array.isArray(existingRiser?.TubeNumbers) ? existingRiser.TubeNumbers : [];
+  const maxTube = tubeNumbers.reduce((maxValue, value) => {
+    const number = Number.parseInt(value, 10);
+    return Number.isFinite(number) && number > maxValue ? number : maxValue;
+  }, 0);
+
+  return maxTube + 1;
 }
 
 function parsePostcodes() {
@@ -516,6 +547,7 @@ function updateSummary() {
   const projectLabel = normalizeText(state.data?.ProjectLabel) ?? 'Sin dato';
   const selectedDp = getSelectedDpLabel() ?? 'Pendiente';
   const connectionCount = Array.isArray(state.data?.Connections) ? state.data.Connections.length : 0;
+  const existingRiser = getExistingRiserForDp(selectedDp);
   const stats = computeStats();
 
   elements.projectLabelCard.textContent = projectLabel;
@@ -523,7 +555,9 @@ function updateSummary() {
   elements.connectionCountCard.textContent = String(connectionCount);
 
   elements.sourceCountStatus.textContent = String(connectionCount);
-  elements.sourceCountDetail.textContent = `${(state.data?.DpLabels ?? []).length} DP detectados en FC/BC`;
+  elements.sourceCountDetail.textContent = existingRiser
+    ? `${(state.data?.DpLabels ?? []).length} DP detectados | siguiente ET: ${String(getNextTubeNumberForDp(selectedDp)).padStart(2, '0')}`
+    : `${(state.data?.DpLabels ?? []).length} DP detectados en FC/BC`;
 
   elements.resolvedCard.dataset.tone = stats.ambiguousRows > 0 || stats.invalidRows > 0 || stats.duplicateRows > 0 ? 'warning' : stats.usedRows > 0 ? 'success' : 'neutral';
   elements.resolvedCountStatus.textContent = `${stats.resolvedRows}/${stats.usedRows}`;
@@ -691,19 +725,21 @@ function collectResolvedCableIds() {
   return updates;
 }
 
-function buildApplyPayload() {
+function buildApplyPayload(options = {}) {
   const dpLabel = getSelectedDpLabel();
+  const startTubeNumber = Math.max(1, Number.parseInt(options.startTubeNumber ?? '1', 10) || 1);
   const trajectRows = [];
   const accesspointRows = [];
   const ductRows = [];
 
-  state.tubes.forEach((tube) => {
+  state.tubes.forEach((tube, tubeIndex) => {
+    const tubeNumber = startTubeNumber + tubeIndex;
     const template = SUBDUCT_TEMPLATES[tube.size] ?? SUBDUCT_TEMPLATES[12];
-    const trajectLabel = `${dpLabel}-TK${String(tube.index).padStart(2, '0')}-S01`;
-    const etLabel = `${dpLabel}-ET-${String(tube.index).padStart(2, '0')}`;
+    const trajectLabel = `${dpLabel}-TK${String(tubeNumber).padStart(2, '0')}-S01`;
+    const etLabel = `${dpLabel}-ET-${String(tubeNumber).padStart(2, '0')}`;
 
     trajectRows.push({
-      ID: tube.index,
+      ID: tubeNumber,
       Label: trajectLabel,
       Locatie_A: dpLabel,
       Locatie_B: etLabel,
@@ -712,7 +748,7 @@ function buildApplyPayload() {
     });
 
     accesspointRows.push({
-      ID: tube.index,
+      ID: tubeNumber,
       Label: etLabel,
       Accesspointtype: 'Kabelmanteleinde',
       X: tube.etCoordinate.x,
@@ -840,6 +876,10 @@ async function loadRiserData() {
 
     setStatus('Datos del riser cargados. Ya puedes asignar casas y elegir los ET.', 'success');
     appendLog(`Proyecto ${data.ProjectLabel} cargado con ${(data.Connections ?? []).length} conexiones y ${(data.DpLabels ?? []).length} DP.`, 'success');
+    const existingRisers = Array.isArray(data.ExistingRisers) ? data.ExistingRisers : [];
+    if (existingRisers.length > 0) {
+      appendLog(`Risers existentes detectados en MDB: ${existingRisers.map((item) => `${item.DpLabel} -> siguiente ET ${String(item.NextTubeNumber ?? 1).padStart(2, '0')}`).join(' | ')}`, 'meta');
+    }
     renderTubes();
   }
   catch (error) {
@@ -919,7 +959,122 @@ async function applyRiser() {
   }
   finally {
     state.applying = false;
-    elements.applyButton.disabled = false;
+    setBusyState(false);
+  }
+}
+
+async function addEtToRiser() {
+  if (!fiberDesktopApi) {
+    return;
+  }
+
+  const validationError = validateBeforeApply();
+  if (validationError) {
+    setStatus(validationError, 'warning');
+    appendLog(validationError, 'warning');
+    return;
+  }
+
+  const dpLabel = getSelectedDpLabel();
+  const startTubeNumber = getNextTubeNumberForDp(dpLabel);
+  const lastTubeNumber = startTubeNumber + state.tubes.length - 1;
+  const payload = buildApplyPayload({ startTubeNumber });
+
+  state.adding = true;
+  setBusyState(false);
+  setStatus(`Anadiendo ET ${String(startTubeNumber).padStart(2, '0')} a ${String(lastTubeNumber).padStart(2, '0')} en ${dpLabel}...`, 'neutral');
+  appendLog(`Anadiendo nuevos ET al riser ${dpLabel}: TK${String(startTubeNumber).padStart(2, '0')} a TK${String(lastTubeNumber).padStart(2, '0')}.`, 'meta');
+
+  try {
+    const result = await fiberDesktopApi.addRiserData(payload);
+    if (Array.isArray(result.missingCableIds) && result.missingCableIds.length > 0) {
+      appendLog(`Cables no encontrados en Kabel: ${result.missingCableIds.join(', ')}`, 'warning');
+    }
+
+    setStatus(`ET anadido al riser en ${result.mdbPath}.`, 'success');
+    appendLog(
+      `ET anadido en ${result.mdbPath}. Traject: ${result.trajectRowsAdded}. Duct: ${result.ductRowsAdded}. Accesspoint: ${result.accesspointRowsAdded}. Kabeltype actualizados: ${result.kabelUpdated}.`,
+      'success'
+    );
+
+    await loadRiserData();
+  }
+  catch (error) {
+    setStatus(error.message, 'error');
+    appendLog(error.message, 'error');
+  }
+  finally {
+    state.adding = false;
+    setBusyState(false);
+  }
+}
+
+async function deleteRiser() {
+  if (!fiberDesktopApi) {
+    return;
+  }
+
+  const dpLabel = getSelectedDpLabel();
+  if (!dpLabel) {
+    setStatus('Selecciona primero el DP del riser que quieres eliminar.', 'warning');
+    appendLog('No se puede eliminar riser sin DP seleccionado.', 'warning');
+    return;
+  }
+
+  const confirmed = window.confirm(
+    `Se eliminaran del MDB las filas de riser para ${dpLabel} en Traject, Duct y Accesspoint.\n\n` +
+    'No se modificara Kabeltype porque no hay historial fiable del valor anterior.\n\n' +
+    'Quieres continuar?'
+  );
+
+  if (!confirmed) {
+    appendLog(`Eliminacion de riser cancelada para ${dpLabel}.`, 'meta');
+    return;
+  }
+
+  state.deleting = true;
+  setBusyState(false);
+  setStatus(`Eliminando riser de ${dpLabel}...`, 'neutral');
+  appendLog(`Eliminando riser de ${dpLabel} en el MDB...`, 'meta');
+
+  try {
+    const result = await fiberDesktopApi.deleteRiserData({
+      fcPath: state.fcPath,
+      bcPath: state.bcPath,
+      projectFolderPath: state.projectFolderPath,
+      dpLabel
+    });
+
+    const removedTotal = Number(result.removedTrajectRows ?? 0) +
+      Number(result.removedDuctRows ?? 0) +
+      Number(result.removedAccesspointRows ?? 0);
+
+    if (removedTotal === 0) {
+      setStatus(`No se ha encontrado ningun riser para ${dpLabel}.`, 'warning');
+      appendLog(`No se eliminaron filas para ${dpLabel}; no habia Traject/Duct/Accesspoint de riser con ese prefijo.`, 'warning');
+      return;
+    }
+
+    setStatus(`Riser eliminado de ${result.mdbPath}.`, 'success');
+    appendLog(
+      `Riser eliminado de ${result.mdbPath}. Traject borrados: ${result.removedTrajectRows}. Duct borrados: ${result.removedDuctRows}. Accesspoint ET borrados: ${result.removedAccesspointRows}.`,
+      'success'
+    );
+
+    if (Array.isArray(result.affectedCableIds) && result.affectedCableIds.length > 0) {
+      appendLog(
+        `Kabeltype no se ha revertido automaticamente. Revisa estos cables si necesitas devolver su tipo anterior: ${result.affectedCableIds.join(', ')}`,
+        'warning'
+      );
+    }
+  }
+  catch (error) {
+    setStatus(error.message, 'error');
+    appendLog(error.message, 'error');
+  }
+  finally {
+    state.deleting = false;
+    setBusyState(false);
   }
 }
 
@@ -1036,6 +1191,14 @@ elements.applyButton.addEventListener('click', () => {
   void applyRiser();
 });
 
+elements.addEtButton.addEventListener('click', () => {
+  void addEtToRiser();
+});
+
+elements.deleteButton.addEventListener('click', () => {
+  void deleteRiser();
+});
+
 elements.tubeCountInput.addEventListener('change', () => {
   updateTubeCount(elements.tubeCountInput.value);
   renderTubes();
@@ -1047,7 +1210,8 @@ elements.postcodeInput.addEventListener('input', () => {
 
 elements.dpSelect.addEventListener('change', () => {
   renderTubes();
-  setStatus(`DP seleccionado: ${elements.dpSelect.value}`, 'neutral');
+  const nextTubeNumber = getNextTubeNumberForDp(elements.dpSelect.value);
+  setStatus(`DP seleccionado: ${elements.dpSelect.value}. Siguiente ET libre: ${String(nextTubeNumber).padStart(2, '0')}.`, 'neutral');
 });
 
 elements.tubeList.addEventListener('input', handleTubeListChange);

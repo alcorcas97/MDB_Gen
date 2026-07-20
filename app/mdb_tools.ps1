@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('ExportCustomerDrawData', 'ImportCustomerCoordinates', 'ExportDpCoordinateTargets', 'ImportDpCoordinates', 'MoveResvCoordinatesToDp', 'SetOapCoordinate', 'ExportCrossCheckData', 'FixCustomerDempingValues', 'ApplyDempingContingency', 'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh', 'ApplyGlaspoortProject', 'InspectConnectionBalance', 'ApplyConnectionSync', 'ApplyRiserData', 'ApplyBuiseind')]
+    [ValidateSet('ExportCustomerDrawData', 'ImportCustomerCoordinates', 'ExportDpCoordinateTargets', 'ImportDpCoordinates', 'MoveResvCoordinatesToDp', 'SetOapCoordinate', 'ExportCrossCheckData', 'FixCustomerDempingValues', 'ApplyDempingContingency', 'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh', 'ApplyGlaspoortProject', 'InspectConnectionBalance', 'ApplyConnectionSync', 'ExportRiserState', 'ApplyRiserData', 'AddRiserData', 'DeleteRiserData', 'ApplyBuiseind')]
     [string]$Mode,
 
     [Parameter(Mandatory = $true)]
@@ -1406,6 +1406,87 @@ function Clear-AccessTableSavedOrder {
     }
 }
 
+function Get-RiserStateEntry {
+    param(
+        [hashtable]$Lookup,
+        [string]$DpLabel
+    )
+
+    $key = $DpLabel.ToUpperInvariant()
+    if (-not $Lookup.ContainsKey($key)) {
+        $Lookup[$key] = [pscustomobject]@{
+            DpLabel         = $DpLabel
+            TubeNumbers     = [System.Collections.Generic.HashSet[int]]::new()
+            TrajectRows     = 0
+            DuctRows        = 0
+            AccesspointRows = 0
+            CableIds        = [System.Collections.Generic.HashSet[string]]::new()
+        }
+    }
+
+    return $Lookup[$key]
+}
+
+function Export-RiserState {
+    param([__ComObject]$Database)
+
+    $lookup = @{}
+
+    foreach ($row in @(Get-TableRows -Database $Database -TableName 'Traject')) {
+        $label = Normalize-Text $row.Label
+        if ($null -ne $label -and $label -match '^(?<dp>.+-ODP[0-9A-Z]+)-TK(?<tube>\d+)-S\d+$') {
+            $entry = Get-RiserStateEntry -Lookup $lookup -DpLabel $Matches.dp
+            [void]$entry.TubeNumbers.Add([int]$Matches.tube)
+            $entry.TrajectRows++
+        }
+    }
+
+    foreach ($row in @(Get-TableRows -Database $Database -TableName 'Duct')) {
+        $label = Normalize-Text $row.Traject
+        if ($null -eq $label) {
+            $label = Normalize-Text $row.Duct
+        }
+
+        if ($null -ne $label -and $label -match '^(?<dp>.+-ODP[0-9A-Z]+)-TK(?<tube>\d+)-S\d+$') {
+            $entry = Get-RiserStateEntry -Lookup $lookup -DpLabel $Matches.dp
+            [void]$entry.TubeNumbers.Add([int]$Matches.tube)
+            $entry.DuctRows++
+            $cableId = Normalize-Text $row.Kabel
+            if ($null -ne $cableId) {
+                [void]$entry.CableIds.Add($cableId)
+            }
+        }
+    }
+
+    foreach ($row in @(Get-TableRows -Database $Database -TableName 'Accesspoint')) {
+        $label = Normalize-Text $row.Label
+        if ($null -ne $label -and $label -match '^(?<dp>.+-ODP[0-9A-Z]+)-ET-(?<tube>\d+)$') {
+            $entry = Get-RiserStateEntry -Lookup $lookup -DpLabel $Matches.dp
+            [void]$entry.TubeNumbers.Add([int]$Matches.tube)
+            $entry.AccesspointRows++
+        }
+    }
+
+    $items = @()
+    foreach ($entry in $lookup.Values) {
+        $tubeNumbers = @($entry.TubeNumbers | Sort-Object)
+        $nextTubeNumber = if ($tubeNumbers.Count -gt 0) { ([int]($tubeNumbers | Measure-Object -Maximum).Maximum) + 1 } else { 1 }
+        $items += [pscustomobject]@{
+            DpLabel         = $entry.DpLabel
+            TubeNumbers     = $tubeNumbers
+            NextTubeNumber  = $nextTubeNumber
+            TrajectRows     = $entry.TrajectRows
+            DuctRows        = $entry.DuctRows
+            AccesspointRows = $entry.AccesspointRows
+            CableIds        = @($entry.CableIds | Sort-Object)
+        }
+    }
+
+    return [pscustomobject]@{
+        Risers = @($items | Sort-Object DpLabel)
+    }
+}
+
 function Apply-RiserData {
     param(
         [__ComObject]$Database,
@@ -1511,6 +1592,215 @@ function Apply-RiserData {
         finalTrajectRows    = @($targetTrajectRows).Count
         finalDuctRows       = @($targetDuctRows).Count
         finalAccesspointRows = @($targetAccesspointRows).Count
+    }
+}
+
+function Add-RiserData {
+    param(
+        [__ComObject]$Database,
+        [string]$Path
+    )
+
+    $sourceData = Get-RiserData -Path $Path
+    $dpLabel = Normalize-Text $sourceData.DpLabel
+    if ($null -eq $dpLabel) {
+        throw 'Los datos del riser no incluyen DpLabel.'
+    }
+
+    $sourceTrajectRows = @($sourceData.TableRows.Traject)
+    $sourceDuctRows = @($sourceData.TableRows.Duct | Sort-Object { [int]$_.ID })
+    $sourceAccesspointRows = @($sourceData.TableRows.Accesspoint)
+    $kabelTypeUpdates = @($sourceData.KabelTypeUpdates)
+
+    $existingTrajectRows = @(Get-TableRows -Database $Database -TableName 'Traject')
+    $existingDuctRows = @(Get-TableRows -Database $Database -TableName 'Duct')
+    $existingAccesspointRows = @(Get-TableRows -Database $Database -TableName 'Accesspoint')
+    $existingKabelRows = @(Get-TableRows -Database $Database -TableName 'Kabel')
+
+    $existingTrajectLabels = @{}
+    foreach ($row in $existingTrajectRows) {
+        $label = Normalize-Text $row.Label
+        if ($null -ne $label) { $existingTrajectLabels[$label.ToUpperInvariant()] = $true }
+    }
+
+    $existingAccesspointLabels = @{}
+    foreach ($row in $existingAccesspointRows) {
+        $label = Normalize-Text $row.Label
+        if ($null -ne $label) { $existingAccesspointLabels[$label.ToUpperInvariant()] = $true }
+    }
+
+    $existingDuctKeys = @{}
+    foreach ($row in $existingDuctRows) {
+        $ductLabel = Normalize-Text $row.Duct
+        $subDuct = Normalize-Text $row.SubDuct
+        if ($null -ne $ductLabel -and $null -ne $subDuct) {
+            $existingDuctKeys[('{0}|{1}' -f $ductLabel, $subDuct).ToUpperInvariant()] = $true
+        }
+    }
+
+    $collisions = [System.Collections.Generic.List[string]]::new()
+    foreach ($row in $sourceTrajectRows) {
+        $label = Normalize-Text $row.Label
+        if ($null -ne $label -and $existingTrajectLabels.ContainsKey($label.ToUpperInvariant())) {
+            $collisions.Add("Traject $label")
+        }
+    }
+    foreach ($row in $sourceAccesspointRows) {
+        $label = Normalize-Text $row.Label
+        if ($null -ne $label -and $existingAccesspointLabels.ContainsKey($label.ToUpperInvariant())) {
+            $collisions.Add("Accesspoint $label")
+        }
+    }
+    foreach ($row in $sourceDuctRows) {
+        $ductLabel = Normalize-Text $row.Duct
+        $subDuct = Normalize-Text $row.SubDuct
+        if ($null -ne $ductLabel -and $null -ne $subDuct -and $existingDuctKeys.ContainsKey(('{0}|{1}' -f $ductLabel, $subDuct).ToUpperInvariant())) {
+            $collisions.Add("Duct $ductLabel / $subDuct")
+        }
+    }
+
+    if ($collisions.Count -gt 0) {
+        throw "No se puede anadir el ET porque ya existen filas para ese riser: $(@($collisions | Select-Object -First 12) -join ', ')"
+    }
+
+    $targetTrajectRows = @(Reset-ConnectionSyncIds -Rows @($existingTrajectRows + $sourceTrajectRows))
+    $targetDuctRows = @(Reset-ConnectionSyncIds -Rows @($existingDuctRows + $sourceDuctRows))
+    $targetAccesspointRows = @(Reset-ConnectionSyncIds -Rows @($existingAccesspointRows + $sourceAccesspointRows))
+
+    $updatedKabelRows = @()
+    $kabelUpdateLookup = @{}
+    foreach ($update in $kabelTypeUpdates) {
+        $cableId = Normalize-Text $update.CableId
+        if ($null -ne $cableId) {
+            $kabelUpdateLookup[$cableId.ToUpperInvariant()] = Normalize-Text $update.Kabeltype
+        }
+    }
+
+    $updatedCableCount = 0
+    $missingCableIds = [System.Collections.Generic.List[string]]::new()
+    foreach ($row in $existingKabelRows) {
+        $rowCableId = Normalize-Text $row.Label
+        if ($null -ne $rowCableId -and $kabelUpdateLookup.ContainsKey($rowCableId.ToUpperInvariant())) {
+            $targetType = $kabelUpdateLookup[$rowCableId.ToUpperInvariant()]
+            $currentType = Normalize-Text $row.Kabeltype
+            $currentComparable = if ($null -eq $currentType) { '' } else { $currentType }
+            $targetComparable = if ($null -eq $targetType) { '' } else { $targetType }
+            if ($currentComparable -ne $targetComparable) {
+                $row.Kabeltype = $targetType
+                $updatedCableCount++
+            }
+
+            $updatedKabelRows += $row
+            [void]$kabelUpdateLookup.Remove($rowCableId.ToUpperInvariant())
+            continue
+        }
+
+        $updatedKabelRows += $row
+    }
+
+    foreach ($missingKey in $kabelUpdateLookup.Keys) {
+        $missingCableIds.Add($missingKey)
+    }
+
+    $updatedKabelRows = @(Reset-ConnectionSyncIds -Rows $updatedKabelRows)
+
+    Clear-AccessTables -Database $Database -TableNames @('Traject', 'Duct', 'Accesspoint', 'Kabel')
+    Write-AccessTable -Database $Database -TableName 'Traject' -Rows $targetTrajectRows
+    Write-AccessTable -Database $Database -TableName 'Duct' -Rows $targetDuctRows
+    Write-AccessTable -Database $Database -TableName 'Accesspoint' -Rows $targetAccesspointRows
+    Write-AccessTable -Database $Database -TableName 'Kabel' -Rows $updatedKabelRows
+    Clear-AccessTableSavedOrder -Database $Database -TableName 'Duct'
+
+    return [pscustomobject]@{
+        dpLabel              = $dpLabel
+        trajectRowsAdded     = @($sourceTrajectRows).Count
+        ductRowsAdded        = @($sourceDuctRows).Count
+        accesspointRowsAdded = @($sourceAccesspointRows).Count
+        kabelUpdated         = $updatedCableCount
+        missingCableIds      = @($missingCableIds | Sort-Object)
+        finalTrajectRows     = @($targetTrajectRows).Count
+        finalDuctRows        = @($targetDuctRows).Count
+        finalAccesspointRows = @($targetAccesspointRows).Count
+    }
+}
+
+function Delete-RiserData {
+    param(
+        [__ComObject]$Database,
+        [string]$Path
+    )
+
+    $sourceData = Get-RiserData -Path $Path
+    $dpLabel = Normalize-Text $sourceData.DpLabel
+    if ($null -eq $dpLabel) {
+        throw 'Los datos del riser no incluyen DpLabel.'
+    }
+
+    $existingTrajectRows = @(Get-TableRows -Database $Database -TableName 'Traject')
+    $existingDuctRows = @(Get-TableRows -Database $Database -TableName 'Duct')
+    $existingAccesspointRows = @(Get-TableRows -Database $Database -TableName 'Accesspoint')
+
+    $targetTrajectRows = @()
+    $removedTrajectRows = 0
+    foreach ($row in $existingTrajectRows) {
+        if (Test-StartsWithNormalized -Value $row.Label -Prefix ('{0}-TK' -f $dpLabel)) {
+            $removedTrajectRows++
+            continue
+        }
+
+        $targetTrajectRows += $row
+    }
+    $targetTrajectRows = @(Reset-ConnectionSyncIds -Rows $targetTrajectRows)
+
+    $targetDuctRows = @()
+    $removedDuctRows = 0
+    $affectedCableLookup = @{}
+    foreach ($row in $existingDuctRows) {
+        $matchesRiser = (Test-StartsWithNormalized -Value $row.Duct -Prefix ('{0}-TK' -f $dpLabel)) -or
+            (Test-StartsWithNormalized -Value $row.Traject -Prefix ('{0}-TK' -f $dpLabel))
+
+        if ($matchesRiser) {
+            $removedDuctRows++
+            $cableId = Normalize-Text $row.Kabel
+            if ($null -ne $cableId) {
+                $affectedCableLookup[$cableId.ToUpperInvariant()] = $cableId
+            }
+            continue
+        }
+
+        $targetDuctRows += $row
+    }
+    $targetDuctRows = @(Reset-ConnectionSyncIds -Rows $targetDuctRows)
+
+    $targetAccesspointRows = @()
+    $removedAccesspointRows = 0
+    foreach ($row in $existingAccesspointRows) {
+        if (Test-StartsWithNormalized -Value $row.Label -Prefix ('{0}-ET-' -f $dpLabel)) {
+            $removedAccesspointRows++
+            continue
+        }
+
+        $targetAccesspointRows += $row
+    }
+    $targetAccesspointRows = @(Reset-ConnectionSyncIds -Rows $targetAccesspointRows)
+
+    if ($removedTrajectRows -gt 0 -or $removedDuctRows -gt 0 -or $removedAccesspointRows -gt 0) {
+        Clear-AccessTables -Database $Database -TableNames @('Traject', 'Duct', 'Accesspoint')
+        Write-AccessTable -Database $Database -TableName 'Traject' -Rows $targetTrajectRows
+        Write-AccessTable -Database $Database -TableName 'Duct' -Rows $targetDuctRows
+        Write-AccessTable -Database $Database -TableName 'Accesspoint' -Rows $targetAccesspointRows
+        Clear-AccessTableSavedOrder -Database $Database -TableName 'Duct'
+    }
+
+    return [pscustomobject]@{
+        dpLabel                = $dpLabel
+        removedTrajectRows     = $removedTrajectRows
+        removedDuctRows        = $removedDuctRows
+        removedAccesspointRows = $removedAccesspointRows
+        affectedCableIds       = @($affectedCableLookup.Values | Sort-Object)
+        finalTrajectRows       = @($targetTrajectRows).Count
+        finalDuctRows          = @($targetDuctRows).Count
+        finalAccesspointRows   = @($targetAccesspointRows).Count
     }
 }
 
@@ -2353,8 +2643,23 @@ try {
             break
         }
 
+        'ExportRiserState' {
+            Export-RiserState -Database $context.Database | ConvertTo-Json -Depth 6
+            break
+        }
+
         'ApplyRiserData' {
             Apply-RiserData -Database $context.Database -Path $AssignmentsPath | ConvertTo-Json -Depth 6
+            break
+        }
+
+        'AddRiserData' {
+            Add-RiserData -Database $context.Database -Path $AssignmentsPath | ConvertTo-Json -Depth 6
+            break
+        }
+
+        'DeleteRiserData' {
+            Delete-RiserData -Database $context.Database -Path $AssignmentsPath | ConvertTo-Json -Depth 6
             break
         }
 
