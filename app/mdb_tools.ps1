@@ -473,35 +473,14 @@ function Export-DpCoordinateTargets {
     return @($rows)
 }
 
-function Import-DpCoordinates {
+function Update-DpCoordinateTable {
     param(
         [__ComObject]$Database,
-        [string]$Path
+        [string]$TableName,
+        [hashtable]$CoordinateLookup
     )
 
-    if (-not (Test-Path -LiteralPath $Path)) {
-        throw "No se ha encontrado el fichero de coordenadas de DP: $Path"
-    }
-
-    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
-    $items = @((ConvertFrom-Json -InputObject ($raw -replace '^\uFEFF', '')))
-    $coordinateLookup = @{}
-
-    foreach ($item in $items) {
-        $label = Normalize-Text (Get-JsonPropertyValue -Object $item -Names @('label', 'Label'))
-        $x = Convert-ToNullableDouble (Get-JsonPropertyValue -Object $item -Names @('x', 'X'))
-        $y = Convert-ToNullableDouble (Get-JsonPropertyValue -Object $item -Names @('y', 'Y'))
-
-        if ($null -ne $label -and $null -ne $x -and $null -ne $y) {
-            $coordinateLookup[$label.ToUpperInvariant()] = [pscustomobject]@{
-                Label = $label
-                X     = [double]$x
-                Y     = [double]$y
-            }
-        }
-    }
-
-    $recordset = $Database.OpenRecordset("SELECT [Label], [X], [Y] FROM [Accesspoint] WHERE [Label] LIKE '*-ODP*'")
+    $recordset = $Database.OpenRecordset("SELECT [Label], [X], [Y] FROM [$TableName] WHERE [Label] LIKE '*-ODP*'")
     $targetRows = 0
     $updatedRows = 0
     $unchangedRows = 0
@@ -512,7 +491,7 @@ function Import-DpCoordinates {
             $targetRows++
             $label = Normalize-Text $recordset.Fields('Label').Value
             $key = if ($null -ne $label) { $label.ToUpperInvariant() } else { $null }
-            $coordinate = if ($null -ne $key -and $coordinateLookup.ContainsKey($key)) { $coordinateLookup[$key] } else { $null }
+            $coordinate = if ($null -ne $key -and $CoordinateLookup.ContainsKey($key)) { $CoordinateLookup[$key] } else { $null }
 
             if ($null -eq $coordinate) {
                 $notMatched += $label
@@ -546,11 +525,56 @@ function Import-DpCoordinates {
 
     return [pscustomobject]@{
         targetRows      = $targetRows
-        coordinateRows  = $coordinateLookup.Count
         updatedRows     = $updatedRows
         unchangedRows   = $unchangedRows
         notMatchedCount = $notMatched.Count
         notMatched      = @($notMatched | Where-Object { $null -ne $_ } | Select-Object -First 20)
+    }
+}
+
+function Import-DpCoordinates {
+    param(
+        [__ComObject]$Database,
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "No se ha encontrado el fichero de coordenadas de DP: $Path"
+    }
+
+    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    $items = @((ConvertFrom-Json -InputObject ($raw -replace '^\uFEFF', '')))
+    $coordinateLookup = @{}
+
+    foreach ($item in $items) {
+        $label = Normalize-Text (Get-JsonPropertyValue -Object $item -Names @('label', 'Label'))
+        $x = Convert-ToNullableDouble (Get-JsonPropertyValue -Object $item -Names @('x', 'X'))
+        $y = Convert-ToNullableDouble (Get-JsonPropertyValue -Object $item -Names @('y', 'Y'))
+
+        if ($null -ne $label -and $null -ne $x -and $null -ne $y) {
+            $coordinateLookup[$label.ToUpperInvariant()] = [pscustomobject]@{
+                Label = $label
+                X     = [double]$x
+                Y     = [double]$y
+            }
+        }
+    }
+
+    $accesspointResult = Update-DpCoordinateTable -Database $Database -TableName 'Accesspoint' -CoordinateLookup $coordinateLookup
+    $spliceBoxResult = Update-DpCoordinateTable -Database $Database -TableName 'SpliceBox' -CoordinateLookup $coordinateLookup
+
+    return [pscustomobject]@{
+        targetRows               = $accesspointResult.targetRows
+        coordinateRows           = $coordinateLookup.Count
+        updatedRows              = $accesspointResult.updatedRows
+        unchangedRows            = $accesspointResult.unchangedRows
+        notMatchedCount          = $accesspointResult.notMatchedCount
+        notMatched               = @($accesspointResult.notMatched)
+        spliceBoxTargetRows      = $spliceBoxResult.targetRows
+        spliceBoxUpdatedRows     = $spliceBoxResult.updatedRows
+        spliceBoxUnchangedRows   = $spliceBoxResult.unchangedRows
+        spliceBoxNotMatchedCount = $spliceBoxResult.notMatchedCount
+        spliceBoxNotMatched      = @($spliceBoxResult.notMatched)
     }
 }
 
