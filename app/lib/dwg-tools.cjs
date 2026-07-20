@@ -547,12 +547,13 @@ ${layerCases}
 function buildExportCustomerCoordinatesLisp({ outputFilePath, progressFilePath }) {
   return `(setq fmdb-output-file "${escapeLispString(toAutoLispPath(outputFilePath))}")
 ${buildProgressHelpersLisp(progressFilePath)}
+(vl-load-com)
 
 (defun fmdb-format-real (value)
   (rtos value 2 8)
 )
 
-(defun fmdb-write-coordinate (handle label layerName point / zValue)
+(defun fmdb-write-coordinate (handle label layerName point sourceType / zValue)
   (if (and handle layerName label point)
     (progn
       (setq zValue (if (and point (caddr point)) (caddr point) 0.0))
@@ -567,6 +568,8 @@ ${buildProgressHelpersLisp(progressFilePath)}
           (fmdb-format-real (cadr point))
           (chr 9)
           (fmdb-format-real zValue)
+          (chr 9)
+          sourceType
         )
         handle
       )
@@ -574,6 +577,42 @@ ${buildProgressHelpersLisp(progressFilePath)}
     )
     nil
   )
+)
+
+(defun fmdb-export-attribute-array (handle attributes insertPoint insertLayer / exported attributeList attribute label)
+  (setq exported 0)
+  (if (and attributes (not (vl-catch-all-error-p attributes)))
+    (progn
+      (setq attributeList (vl-catch-all-apply 'vlax-safearray->list (list (vlax-variant-value attributes))))
+      (if (not (vl-catch-all-error-p attributeList))
+        (foreach attribute attributeList
+          (setq label (vla-get-TextString attribute))
+          (if (fmdb-write-coordinate handle label insertLayer insertPoint "ATTRIB")
+            (setq exported (1+ exported))
+          )
+        )
+      )
+    )
+  )
+  exported
+)
+
+(defun fmdb-export-insert-com-attributes (handle insertEntity insertPoint insertLayer / exported object attributes constantAttributes)
+  (setq exported 0)
+  (setq object (vlax-ename->vla-object insertEntity))
+  (if object
+    (progn
+      (setq attributes (vl-catch-all-apply 'vla-GetAttributes (list object)))
+      (if (not (vl-catch-all-error-p attributes))
+        (setq exported (+ exported (fmdb-export-attribute-array handle attributes insertPoint insertLayer)))
+      )
+      (setq constantAttributes (vl-catch-all-apply 'vla-GetConstantAttributes (list object)))
+      (if (not (vl-catch-all-error-p constantAttributes))
+        (setq exported (+ exported (fmdb-export-attribute-array handle constantAttributes insertPoint insertLayer)))
+      )
+    )
+  )
+  exported
 )
 
 (defun fmdb-export-insert-attributes (handle insertEntity insertPoint insertLayer / nextEntity nextData exported label)
@@ -587,7 +626,7 @@ ${buildProgressHelpersLisp(progressFilePath)}
       )
       ((= (cdr (assoc 0 nextData)) "ATTRIB")
         (setq label (cdr (assoc 1 nextData)))
-        (if (fmdb-write-coordinate handle label insertLayer insertPoint)
+        (if (fmdb-write-coordinate handle label insertLayer insertPoint "ATTRIB")
           (setq exported (1+ exported))
         )
         (setq nextEntity (entnext nextEntity))
@@ -600,7 +639,7 @@ ${buildProgressHelpersLisp(progressFilePath)}
   exported
 )
 
-(defun c:FIBER_EXPORT_CUSTOMER_COORDS (/ handle selection index entity entityData layerName label point exportedCount)
+(defun c:FIBER_EXPORT_CUSTOMER_COORDS (/ handle selection index entity entityData layerName label point exportedCount blockObject effectiveName)
   (fmdb-report-stage "export")
   (setq exportedCount 0)
   (setq handle (open fmdb-output-file "w"))
@@ -616,7 +655,7 @@ ${buildProgressHelpersLisp(progressFilePath)}
             (setq label (cdr (assoc 1 entityData)))
             (setq point (cdr (assoc 10 entityData)))
 
-            (if (fmdb-write-coordinate handle label layerName point)
+            (if (fmdb-write-coordinate handle label layerName point "TEXT")
               (setq exportedCount (1+ exportedCount))
             )
 
@@ -633,14 +672,20 @@ ${buildProgressHelpersLisp(progressFilePath)}
             (setq layerName (cdr (assoc 8 entityData)))
             (setq label (cdr (assoc 2 entityData)))
             (setq point (cdr (assoc 10 entityData)))
+            (setq blockObject (vlax-ename->vla-object entity))
+            (setq effectiveName (if blockObject (vl-catch-all-apply 'vla-get-EffectiveName (list blockObject)) nil))
+            (if (and effectiveName (not (vl-catch-all-error-p effectiveName)))
+              (setq label effectiveName)
+            )
 
-            (if (fmdb-write-coordinate handle label layerName point)
+            (if (fmdb-write-coordinate handle label layerName point "INSERT")
               (setq exportedCount (1+ exportedCount))
             )
 
             (if (= (cdr (assoc 66 entityData)) 1)
               (setq exportedCount (+ exportedCount (fmdb-export-insert-attributes handle entity point layerName)))
             )
+            (setq exportedCount (+ exportedCount (fmdb-export-insert-com-attributes handle entity point layerName)))
             (setq index (1+ index))
           )
         )
@@ -1301,11 +1346,11 @@ async function extractCustomerTextCoordinatesFromOpenDocument(dwgPath) {
       .map((line) => normalizeText(line))
       .filter(Boolean)
       .map((line) => {
-        const [label, layer, x, y, z] = line.split('\t');
+        const [label, layer, x, y, z, entityType] = line.split('\t');
         return {
           label: normalizeText(label),
           layer: normalizeText(layer),
-          entityType: 'TEXT',
+          entityType: normalizeText(entityType) || 'TEXT',
           x: Number(x ?? 0),
           y: Number(y ?? 0),
           z: Number(z ?? 0)

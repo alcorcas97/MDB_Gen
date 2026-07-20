@@ -726,19 +726,32 @@ function normalizeCoordinateLabel(value) {
     .replace(/[^A-Z0-9]/g, '');
 }
 
-function getCoordinateLabelCandidates(value) {
+function getCoordinateLabelCandidates(value, options = {}) {
+  const includeNumericDpAlias = Boolean(options.includeNumericDpAlias);
   const normalized = normalizeCoordinateLabel(value);
   const candidates = [];
 
   if (normalized) {
     candidates.push(normalized);
-    const odpMatch = normalized.match(/ODP[0-9A-Z]+/);
+    const odpMatch = normalized.match(/ODP([0-9A-Z]+)/);
     if (odpMatch) {
       candidates.push(odpMatch[0]);
+      if (includeNumericDpAlias) {
+        candidates.push(odpMatch[1]);
+      }
+    }
+
+    if (includeNumericDpAlias && /^[0-9]{1,4}$/.test(normalized)) {
+      candidates.push(normalized.padStart(3, '0'));
     }
   }
 
   return [...new Set(candidates)];
+}
+
+function isBlockCoordinateSource(item) {
+  const entityType = normalizeCoordinateLabel(item?.entityType);
+  return entityType === 'INSERT' || entityType === 'ATTRIB';
 }
 
 function decodeHtmlText(value) {
@@ -2498,16 +2511,19 @@ ipcMain.handle('dwg:reextract-dp-coordinates', async (_event, payload) => {
     const shortLabel = String(target?.shortLabel ?? '').trim();
 
     for (const alias of [label, shortLabel]) {
-      const normalizedAlias = normalizeCoordinateLabel(alias);
-      if (normalizedAlias && !aliasToTarget.has(normalizedAlias)) {
-        aliasToTarget.set(normalizedAlias, label);
+      for (const candidate of getCoordinateLabelCandidates(alias, { includeNumericDpAlias: true })) {
+        if (candidate && !aliasToTarget.has(candidate)) {
+          aliasToTarget.set(candidate, label);
+        }
       }
     }
   }
 
   const matchedByLabel = new Map();
   for (const item of extraction.coordinates ?? []) {
-    const targetLabel = getCoordinateLabelCandidates(item?.label)
+    const targetLabel = getCoordinateLabelCandidates(item?.label, {
+      includeNumericDpAlias: isBlockCoordinateSource(item)
+    })
       .map((candidate) => aliasToTarget.get(candidate))
       .find(Boolean);
     const x = Number(item?.x);
@@ -2531,7 +2547,30 @@ ipcMain.handle('dwg:reextract-dp-coordinates', async (_event, payload) => {
 
   const coordinates = [...matchedByLabel.values()];
   if (coordinates.length === 0) {
-    throw new Error('No se han encontrado textos de DP en el DWG que coincidan con los Accesspoint de la MDB.');
+    const expectedSample = targets
+      .slice(0, 12)
+      .map((target) => [target?.label, target?.shortLabel].filter(Boolean).join(' / '))
+      .filter(Boolean)
+      .join(', ');
+    const candidateSample = (extraction.coordinates ?? [])
+      .filter((item) => {
+        const label = normalizeCoordinateLabel(item?.label);
+        return isBlockCoordinateSource(item) || label.includes('ODP') || /^[0-9]{1,4}$/.test(label);
+      })
+      .slice(0, 40)
+      .map((item) => `- ${String(item?.entityType ?? 'TEXT')}: ${String(item?.label ?? '')} (layer ${String(item?.layer ?? '')})`)
+      .join('\n');
+
+    sendGenerationEvent({
+      type: 'log',
+      level: 'warning',
+      message: [
+        `No se ha podido cruzar ningun DP. Ejemplos esperados en MDB: ${expectedSample || 'sin muestra'}.`,
+        candidateSample ? `Candidatos leidos del DWG:\n${candidateSample}` : 'No se han leido candidatos de DP en textos/bloques/atributos del DWG.'
+      ].join('\n') + '\n'
+    });
+
+    throw new Error('No se han encontrado textos, bloques o atributos de DP en el DWG que coincidan con los Accesspoint de la MDB.');
   }
 
   const tempCoordinatesPath = path.join(
