@@ -722,7 +722,23 @@ function normalizeCoordinateLabel(value) {
     .replace(/[\u00A0\u202F]/g, ' ')
     .replace(/[\u00AD\u200B\u200C\u200D\u2060\uFEFF]/g, '')
     .trim()
-    .toUpperCase();
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+}
+
+function getCoordinateLabelCandidates(value) {
+  const normalized = normalizeCoordinateLabel(value);
+  const candidates = [];
+
+  if (normalized) {
+    candidates.push(normalized);
+    const odpMatch = normalized.match(/ODP[0-9A-Z]+/);
+    if (odpMatch) {
+      candidates.push(odpMatch[0]);
+    }
+  }
+
+  return [...new Set(candidates)];
 }
 
 function decodeHtmlText(value) {
@@ -2491,8 +2507,9 @@ ipcMain.handle('dwg:reextract-dp-coordinates', async (_event, payload) => {
 
   const matchedByLabel = new Map();
   for (const item of extraction.coordinates ?? []) {
-    const normalizedLabel = normalizeCoordinateLabel(item?.label);
-    const targetLabel = aliasToTarget.get(normalizedLabel);
+    const targetLabel = getCoordinateLabelCandidates(item?.label)
+      .map((candidate) => aliasToTarget.get(candidate))
+      .find(Boolean);
     const x = Number(item?.x);
     const y = Number(item?.y);
 

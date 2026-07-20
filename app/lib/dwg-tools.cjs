@@ -189,6 +189,24 @@ async function extractCustomerTextCoordinatesFromFile(projectFolderPath) {
   const coordinates = [];
 
   for (const entity of database.entities ?? []) {
+    if (entity.type === 'INSERT') {
+      const label = getInsertBlockName(entity);
+      const point = getEntityPoint(entity);
+
+      if (label && point) {
+        coordinates.push({
+          label,
+          layer: normalizeText(entity.layer),
+          entityType: entity.type,
+          x: point.x,
+          y: point.y,
+          z: point.z
+        });
+      }
+
+      continue;
+    }
+
     if (entity.type !== 'TEXT' && entity.type !== 'MTEXT') {
       continue;
     }
@@ -528,25 +546,61 @@ ${layerCases}
 
 function buildExportCustomerCoordinatesLisp({ outputFilePath, progressFilePath }) {
   return `(setq fmdb-output-file "${escapeLispString(toAutoLispPath(outputFilePath))}")
-(setq fmdb-customer-layers '${toLispStringList([...CUSTOMER_LAYER_COLORS.keys()])})
 ${buildProgressHelpersLisp(progressFilePath)}
-
-(defun fmdb-string-member (target items / found)
-  (setq found nil)
-  (while (and items (not found))
-    (if (= target (car items))
-      (setq found T)
-      (setq items (cdr items))
-    )
-  )
-  found
-)
 
 (defun fmdb-format-real (value)
   (rtos value 2 8)
 )
 
-(defun c:FIBER_EXPORT_CUSTOMER_COORDS (/ handle selection index entity entityData layerName label point zValue exportedCount)
+(defun fmdb-write-coordinate (handle label layerName point / zValue)
+  (if (and handle layerName label point)
+    (progn
+      (setq zValue (if (and point (caddr point)) (caddr point) 0.0))
+      (write-line
+        (strcat
+          label
+          (chr 9)
+          (strcase layerName)
+          (chr 9)
+          (fmdb-format-real (car point))
+          (chr 9)
+          (fmdb-format-real (cadr point))
+          (chr 9)
+          (fmdb-format-real zValue)
+        )
+        handle
+      )
+      T
+    )
+    nil
+  )
+)
+
+(defun fmdb-export-insert-attributes (handle insertEntity insertPoint insertLayer / nextEntity nextData exported label)
+  (setq exported 0)
+  (setq nextEntity (entnext insertEntity))
+  (while nextEntity
+    (setq nextData (entget nextEntity))
+    (cond
+      ((= (cdr (assoc 0 nextData)) "SEQEND")
+        (setq nextEntity nil)
+      )
+      ((= (cdr (assoc 0 nextData)) "ATTRIB")
+        (setq label (cdr (assoc 1 nextData)))
+        (if (fmdb-write-coordinate handle label insertLayer insertPoint)
+          (setq exported (1+ exported))
+        )
+        (setq nextEntity (entnext nextEntity))
+      )
+      (T
+        (setq nextEntity (entnext nextEntity))
+      )
+    )
+  )
+  exported
+)
+
+(defun c:FIBER_EXPORT_CUSTOMER_COORDS (/ handle selection index entity entityData layerName label point exportedCount)
   (fmdb-report-stage "export")
   (setq exportedCount 0)
   (setq handle (open fmdb-output-file "w"))
@@ -561,31 +615,32 @@ ${buildProgressHelpersLisp(progressFilePath)}
             (setq layerName (cdr (assoc 8 entityData)))
             (setq label (cdr (assoc 1 entityData)))
             (setq point (cdr (assoc 10 entityData)))
-            (setq zValue (if (and point (caddr point)) (caddr point) 0.0))
 
-            (if (and layerName
-                     label
-                     point
-                     (fmdb-string-member (strcase layerName) fmdb-customer-layers))
-              (progn
-                (write-line
-                  (strcat
-                    label
-                    (chr 9)
-                    (strcase layerName)
-                    (chr 9)
-                    (fmdb-format-real (car point))
-                    (chr 9)
-                    (fmdb-format-real (cadr point))
-                    (chr 9)
-                    (fmdb-format-real zValue)
-                  )
-                  handle
-                )
-                (setq exportedCount (1+ exportedCount))
-              )
+            (if (fmdb-write-coordinate handle label layerName point)
+              (setq exportedCount (1+ exportedCount))
             )
 
+            (setq index (1+ index))
+          )
+        )
+      )
+      (if (setq selection (ssget "_X" '((0 . "INSERT"))))
+        (progn
+          (setq index 0)
+          (repeat (sslength selection)
+            (setq entity (ssname selection index))
+            (setq entityData (entget entity))
+            (setq layerName (cdr (assoc 8 entityData)))
+            (setq label (cdr (assoc 2 entityData)))
+            (setq point (cdr (assoc 10 entityData)))
+
+            (if (fmdb-write-coordinate handle label layerName point)
+              (setq exportedCount (1+ exportedCount))
+            )
+
+            (if (= (cdr (assoc 66 entityData)) 1)
+              (setq exportedCount (+ exportedCount (fmdb-export-insert-attributes handle entity point layerName)))
+            )
             (setq index (1+ index))
           )
         )
