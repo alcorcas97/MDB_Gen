@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('ExportCustomerDrawData', 'ImportCustomerCoordinates', 'SetOapCoordinate', 'ExportCrossCheckData', 'FixCustomerDempingValues', 'ApplyDempingContingency', 'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh', 'ApplyGlaspoortProject', 'InspectConnectionBalance', 'ApplyConnectionSync', 'ApplyRiserData', 'ApplyBuiseind')]
+    [ValidateSet('ExportCustomerDrawData', 'ImportCustomerCoordinates', 'MoveResvCoordinatesToDp', 'SetOapCoordinate', 'ExportCrossCheckData', 'FixCustomerDempingValues', 'ApplyDempingContingency', 'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh', 'ApplyGlaspoortProject', 'InspectConnectionBalance', 'ApplyConnectionSync', 'ApplyRiserData', 'ApplyBuiseind')]
     [string]$Mode,
 
     [Parameter(Mandatory = $true)]
@@ -440,6 +440,110 @@ function Import-CustomerCoordinates {
         updatedCoordinates = $updatedCoordinates
         updatedStatuses    = $updatedStatuses
         importedLabels     = $coordinateLookup.Count
+    }
+}
+
+function Move-ResvCoordinatesToDp {
+    param([__ComObject]$Database)
+
+    $kabelToDp = @{}
+    $kabelRecordset = $Database.OpenRecordset('SELECT [Label], [Locatienaam_A] FROM [Kabel]')
+
+    try {
+        while (-not $kabelRecordset.EOF) {
+            $kabelLabel = Normalize-Text $kabelRecordset.Fields('Label').Value
+            $dpLabel = Normalize-Text $kabelRecordset.Fields('Locatienaam_A').Value
+
+            if ($null -ne $kabelLabel -and $null -ne $dpLabel) {
+                $kabelToDp[$kabelLabel] = $dpLabel
+            }
+
+            $kabelRecordset.MoveNext()
+        }
+    }
+    finally {
+        $kabelRecordset.Close()
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($kabelRecordset)
+    }
+
+    $dpCoordinates = @{}
+    $accesspointRecordset = $Database.OpenRecordset('SELECT [Label], [X], [Y] FROM [Accesspoint]')
+
+    try {
+        while (-not $accesspointRecordset.EOF) {
+            $label = Normalize-Text $accesspointRecordset.Fields('Label').Value
+            $x = Convert-ToNullableDouble $accesspointRecordset.Fields('X').Value
+            $y = Convert-ToNullableDouble $accesspointRecordset.Fields('Y').Value
+
+            if ($null -ne $label -and $null -ne $x -and $null -ne $y) {
+                $dpCoordinates[$label] = [pscustomobject]@{
+                    X = [double]$x
+                    Y = [double]$y
+                }
+            }
+
+            $accesspointRecordset.MoveNext()
+        }
+    }
+    finally {
+        $accesspointRecordset.Close()
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($accesspointRecordset)
+    }
+
+    $recordset = $Database.OpenRecordset("SELECT [ID], [Kabel], [Kastnr], [X], [Y] FROM [Klant] WHERE UCASE([Kastnr]) = 'RESV'")
+    $resvRows = 0
+    $updatedRows = 0
+    $unchangedRows = 0
+    $notMatched = @()
+
+    try {
+        while (-not $recordset.EOF) {
+            $resvRows++
+            $customerId = [int]$recordset.Fields('ID').Value
+            $kabelLabel = Normalize-Text $recordset.Fields('Kabel').Value
+            $dpLabel = if ($null -ne $kabelLabel -and $kabelToDp.ContainsKey($kabelLabel)) { $kabelToDp[$kabelLabel] } else { $null }
+            $coordinate = if ($null -ne $dpLabel -and $dpCoordinates.ContainsKey($dpLabel)) { $dpCoordinates[$dpLabel] } else { $null }
+
+            if ($null -eq $coordinate) {
+                $notMatched += [pscustomobject]@{
+                    ID    = $customerId
+                    Kabel = $kabelLabel
+                    DP    = $dpLabel
+                }
+                $recordset.MoveNext()
+                continue
+            }
+
+            $currentX = Convert-ToNullableDouble $recordset.Fields('X').Value
+            $currentY = Convert-ToNullableDouble $recordset.Fields('Y').Value
+            $xChanged = $null -eq $currentX -or [math]::Abs(([double]$currentX) - $coordinate.X) -gt 0.000001
+            $yChanged = $null -eq $currentY -or [math]::Abs(([double]$currentY) - $coordinate.Y) -gt 0.000001
+
+            if ($xChanged -or $yChanged) {
+                $recordset.Edit()
+                $recordset.Fields('X').Value = $coordinate.X
+                $recordset.Fields('Y').Value = $coordinate.Y
+                $recordset.Update()
+                $updatedRows++
+            }
+            else {
+                $unchangedRows++
+            }
+
+            $recordset.MoveNext()
+        }
+    }
+    finally {
+        $recordset.Close()
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($recordset)
+    }
+
+    return [pscustomobject]@{
+        resvRows        = $resvRows
+        updatedRows     = $updatedRows
+        unchangedRows   = $unchangedRows
+        notMatchedCount = $notMatched.Count
+        notMatched      = @($notMatched | Select-Object -First 20)
     }
 }
 
@@ -2046,6 +2150,11 @@ try {
 
         'ImportCustomerCoordinates' {
             Import-CustomerCoordinates -Database $context.Database -Path $CoordinatesPath | ConvertTo-Json -Depth 4
+            break
+        }
+
+        'MoveResvCoordinatesToDp' {
+            Move-ResvCoordinatesToDp -Database $context.Database | ConvertTo-Json -Depth 5
             break
         }
 

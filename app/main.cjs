@@ -1540,6 +1540,62 @@ ipcMain.handle('mdb:fix-customer-dempings', async (_event, payload) => {
   };
 });
 
+ipcMain.handle('mdb:move-resv-coordinates-to-dp', async (_event, payload) => {
+  if (activeRun) {
+    throw new Error('Ya hay una operacion en curso.');
+  }
+
+  validateProjectAndMdbInput(payload);
+  const workingMdbPath = await resolveProjectWorkingMdbPath(payload.projectFolderPath);
+
+  sendGenerationEvent({
+    type: 'log',
+    level: 'info',
+    message: `MDB de trabajo detectado: ${workingMdbPath}\n`
+  });
+
+  sendGenerationEvent({
+    type: 'status',
+    message: 'Moviendo coordenadas de clientes RESV al DP correspondiente...'
+  });
+
+  const result = await runMdbToolsJson([
+    '-Mode',
+    'MoveResvCoordinatesToDp',
+    '-MdbPath',
+    workingMdbPath
+  ]);
+
+  sendGenerationEvent({
+    type: 'log',
+    level: result.notMatchedCount > 0 ? 'warning' : 'info',
+    message: `RESV al DP: RESV encontrados=${result.resvRows}, actualizados=${result.updatedRows}, ya correctos=${result.unchangedRows}, sin DP/coordenada=${result.notMatchedCount}.\n`
+  });
+
+  if (Array.isArray(result.notMatched) && result.notMatched.length > 0) {
+    const lines = result.notMatched.map((item) => `- ID ${item.ID ?? 'n/d'} | Kabel ${item.Kabel ?? 'sin kabel'} | DP ${item.DP ?? 'sin DP'}`);
+    sendGenerationEvent({
+      type: 'log',
+      level: 'warning',
+      message: `RESV sin coordenada de DP para revisar:\n${lines.join('\n')}\n`
+    });
+  }
+
+  sendGenerationEvent({
+    type: 'status',
+    message: 'Coordenadas RESV actualizadas al DP.'
+  });
+
+  return {
+    mdbPath: workingMdbPath,
+    resvRows: result.resvRows,
+    updatedRows: result.updatedRows,
+    unchangedRows: result.unchangedRows,
+    notMatchedCount: result.notMatchedCount,
+    notMatched: result.notMatched ?? []
+  };
+});
+
 ipcMain.handle('mdb:apply-demping-contingency', async (_event, payload) => {
   if (activeRun) {
     throw new Error('Ya hay una operacion en curso.');

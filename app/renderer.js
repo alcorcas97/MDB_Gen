@@ -23,6 +23,7 @@ const elements = {
   drawCustomerCoordinatesButton: document.getElementById('drawCustomerCoordinatesButton'),
   clearCustomerCoordinatesButton: document.getElementById('clearCustomerCoordinatesButton'),
   extractCustomerCoordinatesButton: document.getElementById('extractCustomerCoordinatesButton'),
+  moveResvCoordinatesToDpButton: document.getElementById('moveResvCoordinatesToDpButton'),
   removeExtraRolesButton: document.getElementById('removeExtraRolesButton'),
   drawAccessnetWithoutAddressButton: document.getElementById('drawAccessnetWithoutAddressButton'),
   applyDempingContingencyButton: document.getElementById('applyDempingContingencyButton'),
@@ -142,6 +143,7 @@ function setRunningState(running, cancelAvailable = false) {
     elements.drawCustomerCoordinatesButton,
     elements.clearCustomerCoordinatesButton,
     elements.extractCustomerCoordinatesButton,
+    elements.moveResvCoordinatesToDpButton,
     elements.removeExtraRolesButton,
     elements.drawAccessnetWithoutAddressButton,
     elements.applyDempingContingencyButton,
@@ -1044,6 +1046,15 @@ async function extractCustomerCoordinates() {
   });
 }
 
+async function moveResvCoordinatesToDp() {
+  await runProjectTool({
+    startMessage: 'Moviendo coordenadas de conexiones RESV al DP correspondiente...',
+    successMessage: (result) => `RESV al DP: ${result.updatedRows} clientes actualizados de ${result.resvRows} RESV.`,
+    successLog: (result) => `RESV al DP completado en ${result.mdbPath}. RESV encontrados: ${result.resvRows}. Actualizados: ${result.updatedRows}. Ya correctos: ${result.unchangedRows}. Sin DP/coordenada: ${result.notMatchedCount}.`,
+    action: (payload) => fiberDesktopApi.moveResvCoordinatesToDp(payload)
+  });
+}
+
 async function getOapCoordinate() {
   await runProjectTool({
     startMessage: 'Buscando coordenada OAP en el DWG...',
@@ -1196,6 +1207,10 @@ elements.clearCustomerCoordinatesButton.addEventListener('click', () => {
 
 elements.extractCustomerCoordinatesButton.addEventListener('click', () => {
   void extractCustomerCoordinates();
+});
+
+elements.moveResvCoordinatesToDpButton.addEventListener('click', () => {
+  void moveResvCoordinatesToDp();
 });
 
 elements.removeExtraRolesButton.addEventListener('click', () => {
