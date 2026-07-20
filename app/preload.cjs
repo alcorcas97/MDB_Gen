@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('fiberApp', {
   clearCustomerCoordinates: (payload) => ipcRenderer.invoke('dwg:clear-customers', payload),
   extractCustomerCoordinates: (payload) => ipcRenderer.invoke('dwg:extract-customers', payload),
   moveResvCoordinatesToDp: (payload) => ipcRenderer.invoke('mdb:move-resv-coordinates-to-dp', payload),
+  reextractDpCoordinates: (payload) => ipcRenderer.invoke('dwg:reextract-dp-coordinates', payload),
   removeExtraRoles: (payload) => ipcRenderer.invoke('dwg:remove-extra-roles', payload),
   drawAccessnetWithoutAddress: (payload) => ipcRenderer.invoke('dwg:draw-accessnet-without-address', payload),
   applyDempingContingency: (payload) => ipcRenderer.invoke('mdb:apply-demping-contingency', payload),

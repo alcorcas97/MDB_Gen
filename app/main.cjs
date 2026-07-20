@@ -717,6 +717,14 @@ function validateProjectAndMdbInput(payload) {
   }
 }
 
+function normalizeCoordinateLabel(value) {
+  return String(value ?? '')
+    .replace(/[\u00A0\u202F]/g, ' ')
+    .replace(/[\u00AD\u200B\u200C\u200D\u2060\uFEFF]/g, '')
+    .trim()
+    .toUpperCase();
+}
+
 function decodeHtmlText(value) {
   return String(value ?? '')
     .replace(/<br\s*\/?>/gi, ' ')
@@ -2415,6 +2423,144 @@ ipcMain.handle('dwg:extract-customers', async (_event, payload) => {
       updated: importResult.updated,
       updatedCoordinates: importResult.updatedCoordinates ?? 0,
       updatedStatuses: importResult.updatedStatuses ?? 0
+    };
+  }
+  finally {
+    await fsp.rm(tempCoordinatesPath, { force: true }).catch(() => {});
+  }
+});
+
+ipcMain.handle('dwg:reextract-dp-coordinates', async (_event, payload) => {
+  if (activeRun) {
+    throw new Error('Ya hay una operacion en curso.');
+  }
+
+  validateProjectAndMdbInput(payload);
+  const workingMdbPath = await resolveProjectWorkingMdbPath(payload.projectFolderPath);
+
+  sendGenerationEvent({
+    type: 'log',
+    level: 'info',
+    message: `MDB de trabajo detectado: ${workingMdbPath}\n`
+  });
+
+  sendGenerationEvent({
+    type: 'status',
+    message: 'Leyendo DPs actuales de la MDB...'
+  });
+
+  const dpTargets = await runMdbToolsJson([
+    '-Mode',
+    'ExportDpCoordinateTargets',
+    '-MdbPath',
+    workingMdbPath
+  ]);
+
+  const targets = Array.isArray(dpTargets) ? dpTargets : (dpTargets ? [dpTargets] : []);
+  if (targets.length === 0) {
+    throw new Error('No se han encontrado Accesspoint de tipo DP en la MDB.');
+  }
+
+  sendGenerationEvent({
+    type: 'status',
+    message: 'Leyendo textos del DWG para re-extraer coordenadas de DPs...'
+  });
+
+  const { extractCustomerTextCoordinates } = getDwgToolsModule();
+  const extraction = await extractCustomerTextCoordinates(payload.projectFolderPath);
+  if (extraction.source === 'open-document') {
+    sendGenerationEvent({
+      type: 'log',
+      level: 'info',
+      message: 'DWG abierto detectado en AutoCAD. Las coordenadas de DPs se han leido del documento abierto.\n'
+    });
+  }
+
+  const aliasToTarget = new Map();
+  for (const target of targets) {
+    const label = String(target?.label ?? '').trim();
+    const shortLabel = String(target?.shortLabel ?? '').trim();
+
+    for (const alias of [label, shortLabel]) {
+      const normalizedAlias = normalizeCoordinateLabel(alias);
+      if (normalizedAlias && !aliasToTarget.has(normalizedAlias)) {
+        aliasToTarget.set(normalizedAlias, label);
+      }
+    }
+  }
+
+  const matchedByLabel = new Map();
+  for (const item of extraction.coordinates ?? []) {
+    const normalizedLabel = normalizeCoordinateLabel(item?.label);
+    const targetLabel = aliasToTarget.get(normalizedLabel);
+    const x = Number(item?.x);
+    const y = Number(item?.y);
+
+    if (!targetLabel || !Number.isFinite(x) || !Number.isFinite(y)) {
+      continue;
+    }
+
+    if (!matchedByLabel.has(targetLabel)) {
+      matchedByLabel.set(targetLabel, {
+        label: targetLabel,
+        matchedText: item.label,
+        layer: item.layer,
+        x,
+        y,
+        z: Number(item?.z ?? 0)
+      });
+    }
+  }
+
+  const coordinates = [...matchedByLabel.values()];
+  if (coordinates.length === 0) {
+    throw new Error('No se han encontrado textos de DP en el DWG que coincidan con los Accesspoint de la MDB.');
+  }
+
+  const tempCoordinatesPath = path.join(
+    os.tmpdir(),
+    `fiber-dp-coordinates-${Date.now()}-${Math.random().toString(16).slice(2)}.json`
+  );
+
+  try {
+    await fsp.writeFile(tempCoordinatesPath, JSON.stringify(coordinates, null, 2), 'utf8');
+    const importResult = await runMdbToolsJson([
+      '-Mode',
+      'ImportDpCoordinates',
+      '-MdbPath',
+      workingMdbPath,
+      '-CoordinatesPath',
+      tempCoordinatesPath
+    ]);
+
+    sendGenerationEvent({
+      type: 'log',
+      level: importResult.notMatchedCount > 0 ? 'warning' : 'info',
+      message: `DPs en MDB=${targets.length}. Textos DWG coincidentes=${coordinates.length}. Actualizados=${importResult.updatedRows}. Ya correctos=${importResult.unchangedRows}. No encontrados=${importResult.notMatchedCount}.\n`
+    });
+
+    if (Array.isArray(importResult.notMatched) && importResult.notMatched.length > 0) {
+      sendGenerationEvent({
+        type: 'log',
+        level: 'warning',
+        message: `DPs sin texto/coordenada encontrada:\n${importResult.notMatched.map((label) => `- ${label}`).join('\n')}\n`
+      });
+    }
+
+    sendGenerationEvent({
+      type: 'status',
+      message: 'Coordenadas de DPs re-extraidas correctamente.'
+    });
+
+    return {
+      mdbPath: workingMdbPath,
+      dwgPath: extraction.dwgPath,
+      targetCount: targets.length,
+      coordinateCount: coordinates.length,
+      updatedRows: importResult.updatedRows,
+      unchangedRows: importResult.unchangedRows,
+      notMatchedCount: importResult.notMatchedCount,
+      notMatched: importResult.notMatched ?? []
     };
   }
   finally {

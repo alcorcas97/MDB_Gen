@@ -24,6 +24,7 @@ const elements = {
   clearCustomerCoordinatesButton: document.getElementById('clearCustomerCoordinatesButton'),
   extractCustomerCoordinatesButton: document.getElementById('extractCustomerCoordinatesButton'),
   moveResvCoordinatesToDpButton: document.getElementById('moveResvCoordinatesToDpButton'),
+  reextractDpCoordinatesButton: document.getElementById('reextractDpCoordinatesButton'),
   removeExtraRolesButton: document.getElementById('removeExtraRolesButton'),
   drawAccessnetWithoutAddressButton: document.getElementById('drawAccessnetWithoutAddressButton'),
   applyDempingContingencyButton: document.getElementById('applyDempingContingencyButton'),
@@ -144,6 +145,7 @@ function setRunningState(running, cancelAvailable = false) {
     elements.clearCustomerCoordinatesButton,
     elements.extractCustomerCoordinatesButton,
     elements.moveResvCoordinatesToDpButton,
+    elements.reextractDpCoordinatesButton,
     elements.removeExtraRolesButton,
     elements.drawAccessnetWithoutAddressButton,
     elements.applyDempingContingencyButton,
@@ -1055,6 +1057,15 @@ async function moveResvCoordinatesToDp() {
   });
 }
 
+async function reextractDpCoordinates() {
+  await runProjectTool({
+    startMessage: 'Re-extrayendo coordenadas de DPs desde AutoCAD/DWG...',
+    successMessage: (result) => `DPs actualizados: ${result.updatedRows} de ${result.targetCount}.`,
+    successLog: (result) => `Re-extraccion de DPs completada en ${result.mdbPath}. DPs en MDB: ${result.targetCount}. Coordenadas encontradas en DWG: ${result.coordinateCount}. Actualizados: ${result.updatedRows}. Ya correctos: ${result.unchangedRows}. No encontrados: ${result.notMatchedCount}.`,
+    action: (payload) => fiberDesktopApi.reextractDpCoordinates(payload)
+  });
+}
+
 async function getOapCoordinate() {
   await runProjectTool({
     startMessage: 'Buscando coordenada OAP en el DWG...',
@@ -1211,6 +1222,10 @@ elements.extractCustomerCoordinatesButton.addEventListener('click', () => {
 
 elements.moveResvCoordinatesToDpButton.addEventListener('click', () => {
   void moveResvCoordinatesToDp();
+});
+
+elements.reextractDpCoordinatesButton.addEventListener('click', () => {
+  void reextractDpCoordinates();
 });
 
 elements.removeExtraRolesButton.addEventListener('click', () => {

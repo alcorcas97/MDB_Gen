@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('ExportCustomerDrawData', 'ImportCustomerCoordinates', 'MoveResvCoordinatesToDp', 'SetOapCoordinate', 'ExportCrossCheckData', 'FixCustomerDempingValues', 'ApplyDempingContingency', 'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh', 'ApplyGlaspoortProject', 'InspectConnectionBalance', 'ApplyConnectionSync', 'ApplyRiserData', 'ApplyBuiseind')]
+    [ValidateSet('ExportCustomerDrawData', 'ImportCustomerCoordinates', 'ExportDpCoordinateTargets', 'ImportDpCoordinates', 'MoveResvCoordinatesToDp', 'SetOapCoordinate', 'ExportCrossCheckData', 'FixCustomerDempingValues', 'ApplyDempingContingency', 'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh', 'ApplyGlaspoortProject', 'InspectConnectionBalance', 'ApplyConnectionSync', 'ApplyRiserData', 'ApplyBuiseind')]
     [string]$Mode,
 
     [Parameter(Mandatory = $true)]
@@ -440,6 +440,117 @@ function Import-CustomerCoordinates {
         updatedCoordinates = $updatedCoordinates
         updatedStatuses    = $updatedStatuses
         importedLabels     = $coordinateLookup.Count
+    }
+}
+
+function Export-DpCoordinateTargets {
+    param([__ComObject]$Database)
+
+    $rows = @()
+    $recordset = $Database.OpenRecordset("SELECT [Label], [Accesspointtype], [X], [Y] FROM [Accesspoint] WHERE [Label] LIKE '*-ODP*' ORDER BY [Label]")
+
+    try {
+        while (-not $recordset.EOF) {
+            $label = Normalize-Text $recordset.Fields('Label').Value
+            if ($null -ne $label) {
+                $rows += [pscustomobject]@{
+                    label           = $label
+                    shortLabel      = ($label -replace '^.*-(ODP[0-9A-Z]+)$', '$1')
+                    accesspointType = Normalize-Text $recordset.Fields('Accesspointtype').Value
+                    x               = Convert-ToNullableDouble $recordset.Fields('X').Value
+                    y               = Convert-ToNullableDouble $recordset.Fields('Y').Value
+                }
+            }
+
+            $recordset.MoveNext()
+        }
+    }
+    finally {
+        $recordset.Close()
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($recordset)
+    }
+
+    return @($rows)
+}
+
+function Import-DpCoordinates {
+    param(
+        [__ComObject]$Database,
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "No se ha encontrado el fichero de coordenadas de DP: $Path"
+    }
+
+    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    $items = @((ConvertFrom-Json -InputObject ($raw -replace '^\uFEFF', '')))
+    $coordinateLookup = @{}
+
+    foreach ($item in $items) {
+        $label = Normalize-Text (Get-JsonPropertyValue -Object $item -Names @('label', 'Label'))
+        $x = Convert-ToNullableDouble (Get-JsonPropertyValue -Object $item -Names @('x', 'X'))
+        $y = Convert-ToNullableDouble (Get-JsonPropertyValue -Object $item -Names @('y', 'Y'))
+
+        if ($null -ne $label -and $null -ne $x -and $null -ne $y) {
+            $coordinateLookup[$label.ToUpperInvariant()] = [pscustomobject]@{
+                Label = $label
+                X     = [double]$x
+                Y     = [double]$y
+            }
+        }
+    }
+
+    $recordset = $Database.OpenRecordset("SELECT [Label], [X], [Y] FROM [Accesspoint] WHERE [Label] LIKE '*-ODP*'")
+    $targetRows = 0
+    $updatedRows = 0
+    $unchangedRows = 0
+    $notMatched = @()
+
+    try {
+        while (-not $recordset.EOF) {
+            $targetRows++
+            $label = Normalize-Text $recordset.Fields('Label').Value
+            $key = if ($null -ne $label) { $label.ToUpperInvariant() } else { $null }
+            $coordinate = if ($null -ne $key -and $coordinateLookup.ContainsKey($key)) { $coordinateLookup[$key] } else { $null }
+
+            if ($null -eq $coordinate) {
+                $notMatched += $label
+                $recordset.MoveNext()
+                continue
+            }
+
+            $currentX = Convert-ToNullableDouble $recordset.Fields('X').Value
+            $currentY = Convert-ToNullableDouble $recordset.Fields('Y').Value
+            $xChanged = $null -eq $currentX -or [math]::Abs(([double]$currentX) - $coordinate.X) -gt 0.000001
+            $yChanged = $null -eq $currentY -or [math]::Abs(([double]$currentY) - $coordinate.Y) -gt 0.000001
+
+            if ($xChanged -or $yChanged) {
+                $recordset.Edit()
+                $recordset.Fields('X').Value = $coordinate.X
+                $recordset.Fields('Y').Value = $coordinate.Y
+                $recordset.Update()
+                $updatedRows++
+            }
+            else {
+                $unchangedRows++
+            }
+
+            $recordset.MoveNext()
+        }
+    }
+    finally {
+        $recordset.Close()
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($recordset)
+    }
+
+    return [pscustomobject]@{
+        targetRows      = $targetRows
+        coordinateRows  = $coordinateLookup.Count
+        updatedRows     = $updatedRows
+        unchangedRows   = $unchangedRows
+        notMatchedCount = $notMatched.Count
+        notMatched      = @($notMatched | Where-Object { $null -ne $_ } | Select-Object -First 20)
     }
 }
 
@@ -2150,6 +2261,16 @@ try {
 
         'ImportCustomerCoordinates' {
             Import-CustomerCoordinates -Database $context.Database -Path $CoordinatesPath | ConvertTo-Json -Depth 4
+            break
+        }
+
+        'ExportDpCoordinateTargets' {
+            Export-DpCoordinateTargets -Database $context.Database | ConvertTo-Json -Depth 5
+            break
+        }
+
+        'ImportDpCoordinates' {
+            Import-DpCoordinates -Database $context.Database -Path $CoordinatesPath | ConvertTo-Json -Depth 5
             break
         }
 
