@@ -386,12 +386,10 @@ function resolveRow(tubeIndex, rowIndex) {
   };
 }
 
-function getDuplicateCableIdsByTube() {
-  const duplicatesByTube = new Map();
+function getDuplicateCableOccurrences() {
+  const occurrences = new Map();
 
   for (let tubeIndex = 0; tubeIndex < state.tubes.length; tubeIndex += 1) {
-    const seen = new Set();
-    const duplicates = new Set();
     const tube = state.tubes[tubeIndex];
 
     for (let rowIndex = 0; rowIndex < tube.rows.length; rowIndex += 1) {
@@ -402,29 +400,30 @@ function getDuplicateCableIdsByTube() {
       }
 
       const key = cableId.toUpperCase();
-      if (seen.has(key)) {
-        duplicates.add(key);
-        continue;
-      }
-
-      seen.add(key);
-    }
-
-    if (duplicates.size > 0) {
-      duplicatesByTube.set(tubeIndex, duplicates);
+      const current = occurrences.get(key) ?? {
+        cableId,
+        positions: []
+      };
+      current.positions.push({
+        tubeIndex,
+        rowIndex,
+        tubeNumber: tube.index,
+        positionNumber: rowIndex + 1
+      });
+      occurrences.set(key, current);
     }
   }
 
-  return duplicatesByTube;
+  return new Map([...occurrences].filter(([, occurrence]) => occurrence.positions.length > 1));
 }
 
-function isDuplicateCableInTube(tubeIndex, cableId) {
+function isDuplicateCableInRiser(cableId) {
   const normalizedCableId = normalizeText(cableId)?.toUpperCase();
   if (!normalizedCableId) {
     return false;
   }
 
-  return getDuplicateCableIdsByTube().get(tubeIndex)?.has(normalizedCableId) ?? false;
+  return getDuplicateCableOccurrences().has(normalizedCableId);
 }
 
 function getNextHouseSlot(tubeIndex, rowIndex) {
@@ -489,7 +488,7 @@ function computeStats() {
       const resolution = resolveRow(tubeIndex, rowIndex);
       if (resolution.status === 'resolved') {
         resolvedRows += 1;
-        if (isDuplicateCableInTube(tubeIndex, resolution.candidate?.CableId)) {
+        if (isDuplicateCableInRiser(resolution.candidate?.CableId)) {
           duplicateRows += 1;
         }
       }
@@ -542,7 +541,7 @@ function updateSummary() {
 function renderTubeRow(tube, tubeIndex, rowIndex, subductLabel) {
   const resolution = resolveRow(tubeIndex, rowIndex);
   const candidate = resolution.candidate ?? null;
-  const isDuplicate = candidate ? isDuplicateCableInTube(tubeIndex, candidate.CableId) : false;
+  const isDuplicate = candidate ? isDuplicateCableInRiser(candidate.CableId) : false;
   const mainClass = resolution.status === 'resolved'
     ? isDuplicate ? 'warning' : 'success'
     : resolution.status === 'ambiguous' || resolution.status === 'missing-postcodes'
@@ -558,7 +557,7 @@ function renderTubeRow(tube, tubeIndex, rowIndex, subductLabel) {
   if (resolution.status === 'resolved' && candidate) {
     resolveMain = candidate.CableId;
     resolveDetail = isDuplicate
-      ? `Duplicado en este tubo | ${formatAddress(candidate)} | ${candidate.DpLabel}`
+      ? `Duplicado en el riser | ${formatAddress(candidate)} | ${candidate.DpLabel}`
       : `${formatAddress(candidate)} | ${candidate.DpLabel}`;
   }
   else if (resolution.status === 'ambiguous') {
@@ -584,9 +583,10 @@ function renderTubeRow(tube, tubeIndex, rowIndex, subductLabel) {
     resolveDetail = resolution.message;
   }
 
+  const rowTone = isDuplicate ? 'warning' : resolution.tone;
   const color = SUBDUCT_COLORS[subductLabel] ?? '#cccccc';
   return `
-    <div class="tube-grid-row" data-tone="${resolution.tone === 'neutral' ? '' : resolution.tone}">
+    <div class="tube-grid-row" data-tone="${rowTone === 'neutral' ? '' : rowTone}">
       <div class="position-chip">${rowIndex + 1}</div>
       <div class="subduct-chip">
         <span class="subduct-dot" style="background:${color}"></span>
@@ -794,12 +794,15 @@ function validateBeforeApply() {
     }
   }
 
-  const duplicateCableIdsByTube = getDuplicateCableIdsByTube();
-  if (duplicateCableIdsByTube.size > 0) {
-    const duplicateParts = [...duplicateCableIdsByTube.entries()].map(([tubeIndex, cableIds]) => (
-      `tubo ${tubeIndex + 1}: ${[...cableIds].join(', ')}`
-    ));
-    return `Hay KabelID duplicados dentro del mismo tubo (${duplicateParts.join(' | ')}). Corrige la asignacion antes de aplicar.`;
+  const duplicateCableOccurrences = getDuplicateCableOccurrences();
+  if (duplicateCableOccurrences.size > 0) {
+    const duplicateParts = [...duplicateCableOccurrences.values()].map((occurrence) => {
+      const positions = occurrence.positions
+        .map((position) => `tubo ${position.tubeNumber} pos. ${position.positionNumber}`)
+        .join(', ');
+      return `${occurrence.cableId}: ${positions}`;
+    });
+    return `Hay KabelID duplicados en el riser (${duplicateParts.join(' | ')}). Corrige la asignacion antes de aplicar.`;
   }
 
   return null;
