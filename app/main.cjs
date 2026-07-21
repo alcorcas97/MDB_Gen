@@ -1286,7 +1286,17 @@ async function loadExistingRiserState(projectFolderPath) {
 
 async function writeRiserAssignments(payload, assignmentsPath, tableRows) {
   const dpLabel = String(payload?.dpLabel ?? '').trim();
-  await writeRiserAssignments(payload, assignmentsPath, tableRows);
+  const normalizedPayload = {
+    DpLabel: dpLabel,
+    TableRows: {
+      Traject: tableRows.Traject,
+      Duct: tableRows.Duct,
+      Accesspoint: tableRows.Accesspoint
+    },
+    KabelTypeUpdates: Array.isArray(payload?.kabelTypeUpdates) ? payload.kabelTypeUpdates : []
+  };
+
+  await fsp.writeFile(assignmentsPath, JSON.stringify(normalizedPayload, null, 2), 'utf8');
 }
 
 async function analyzeAmbiguousInternalDpsWithPowerShell(payload, metadataPath) {
