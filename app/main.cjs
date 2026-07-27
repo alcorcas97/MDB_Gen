@@ -2426,14 +2426,6 @@ ipcMain.handle('mdb:update-fc', async (_event, payload) => {
       assignmentsPath
     ]);
 
-    let complexAssignmentsPayload = null;
-    try {
-      complexAssignmentsPayload = JSON.parse(await fsp.readFile(assignmentsPath, 'utf8'));
-    }
-    catch {
-      complexAssignmentsPayload = null;
-    }
-
     const result = await runMdbToolsJson([
       '-Mode',
       'ApplyFcRefresh',
@@ -2821,6 +2813,14 @@ ipcMain.handle('mdb:rebuild-customer-complexes', async (_event, payload) => {
       '-ComplexAssignmentsOutputPath',
       assignmentsPath
     ]);
+
+    let complexAssignmentsPayload = null;
+    try {
+      complexAssignmentsPayload = JSON.parse(await fsp.readFile(assignmentsPath, 'utf8'));
+    }
+    catch {
+      complexAssignmentsPayload = null;
+    }
 
     const result = await runMdbToolsJson([
       '-Mode',
