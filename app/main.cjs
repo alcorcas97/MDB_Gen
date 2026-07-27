@@ -24,6 +24,7 @@ let projectMetadataModule = null;
 let dwgToolsModule = null;
 let crossCheckToolsModule = null;
 let updateCheckStarted = false;
+let usageLogStarted = false;
 const selfTestMode = process.argv.includes('--self-test');
 
 function appendRuntimeLog(message) {
@@ -439,6 +440,273 @@ function requestJson(url) {
       request.destroy(new Error('Tiempo de espera agotado consultando GitHub.'));
     });
   });
+}
+
+function requestText(url, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(url, {
+      headers: {
+        'User-Agent': 'Fiber-MDB-Generator'
+      }
+    }, (response) => {
+      const statusCode = Number(response.statusCode ?? 0);
+      const location = String(response.headers?.location ?? '').trim();
+
+      if (statusCode >= 300 && statusCode < 400 && location) {
+        response.resume();
+        resolve(requestText(new URL(location, url).toString(), timeoutMs));
+        return;
+      }
+
+      if (!response.statusCode || response.statusCode >= 400) {
+        response.resume();
+        reject(new Error(`HTTP ${response.statusCode ?? 'error'}`));
+        return;
+      }
+
+      let raw = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => {
+        raw += chunk;
+      });
+      response.on('end', () => {
+        resolve(raw);
+      });
+    });
+
+    request.on('error', reject);
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error('Tiempo de espera agotado.'));
+    });
+  });
+}
+
+function normalizeUsageLogConfig(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    if (trimmed.startsWith('{')) {
+      try {
+        return normalizeUsageLogConfig(JSON.parse(trimmed));
+      }
+      catch {
+        return null;
+      }
+    }
+
+    return { endpoint: trimmed, format: 'json' };
+  }
+
+  if (typeof value === 'object') {
+    const endpoint = String(value.endpoint ?? value.url ?? '').trim();
+    if (!endpoint) {
+      return null;
+    }
+
+    return {
+      endpoint,
+      format: String(value.format ?? 'json').trim().toLowerCase(),
+      fields: value.fields && typeof value.fields === 'object' ? value.fields : null
+    };
+  }
+
+  return null;
+}
+
+function getLocalUsageLogConfig() {
+  const candidates = [
+    process.env.FIBER_MDB_USAGE_LOG_ENDPOINT,
+    path.join(process.env.ProgramData || 'C:\\ProgramData', 'Fiber MDB Generator', 'usage-log-endpoint.json'),
+    path.join(process.env.ProgramData || 'C:\\ProgramData', 'Fiber MDB Generator', 'usage-log-endpoint.txt'),
+    path.join(appRoot, 'app', 'assets', 'usage-log-endpoint.json'),
+    path.join(appRoot, 'app', 'assets', 'usage-log-endpoint.txt')
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      if (!candidate) {
+        continue;
+      }
+
+      if (/^https:\/\//i.test(String(candidate))) {
+        const config = normalizeUsageLogConfig(candidate);
+        if (config) {
+          return config;
+        }
+        continue;
+      }
+
+      if (fs.existsSync(candidate)) {
+        const config = normalizeUsageLogConfig(fs.readFileSync(candidate, 'utf8'));
+        if (config) {
+          return config;
+        }
+      }
+    }
+    catch {
+    }
+  }
+
+  try {
+    const packageJsonPath = path.join(appRoot, 'package.json');
+    const packageData = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+    return normalizeUsageLogConfig(packageData?.fiberMdb?.usageLog);
+  }
+  catch {
+    return null;
+  }
+}
+
+async function getRemoteUsageLogConfig() {
+  const repositoryFullName = getConfiguredGitHubRepository();
+  if (!repositoryFullName) {
+    return null;
+  }
+
+  try {
+    const release = await requestJson(`https://api.github.com/repos/${repositoryFullName}/releases/latest`);
+    const assets = Array.isArray(release?.assets) ? release.assets : [];
+    const configAsset = assets.find((asset) => /^usage-log-endpoint\.(json|txt)$/i.test(String(asset?.name ?? '')));
+    if (!configAsset?.browser_download_url) {
+      return null;
+    }
+
+    const raw = await requestText(configAsset.browser_download_url, 5000);
+    return normalizeUsageLogConfig(raw);
+  }
+  catch (error) {
+    appendRuntimeLog(`usage-log-config-skip ${error?.message ?? error}`);
+    return null;
+  }
+}
+
+function buildUsageLogPayload() {
+  let username = null;
+  try {
+    username = os.userInfo()?.username ?? null;
+  }
+  catch {
+    username = process.env.USERNAME ?? null;
+  }
+
+  return {
+    event: 'app_launch',
+    app: 'Fiber MDB Generator',
+    version: app.getVersion(),
+    username,
+    computerName: os.hostname(),
+    userDomain: process.env.USERDOMAIN ?? null,
+    timestamp: new Date().toISOString(),
+    platform: process.platform,
+    arch: process.arch,
+    osRelease: os.release(),
+    locale: typeof app.getLocale === 'function' ? app.getLocale() : null,
+    packaged: app.isPackaged
+  };
+}
+
+function buildUsageLogRequest(config, payload) {
+  const format = String(config?.format ?? 'json').toLowerCase();
+
+  if (format === 'form' || format === 'urlencoded') {
+    const body = new URLSearchParams();
+    const fields = config?.fields && typeof config.fields === 'object' ? config.fields : null;
+
+    if (fields) {
+      for (const [payloadKey, fieldName] of Object.entries(fields)) {
+        if (!fieldName) {
+          continue;
+        }
+
+        body.set(String(fieldName), String(payload[payloadKey] ?? ''));
+      }
+    }
+    else {
+      for (const [payloadKey, value] of Object.entries(payload)) {
+        body.set(payloadKey, String(value ?? ''));
+      }
+    }
+
+    return {
+      body: body.toString(),
+      contentType: 'application/x-www-form-urlencoded; charset=utf-8'
+    };
+  }
+
+  return {
+    body: JSON.stringify(payload),
+    contentType: 'application/json; charset=utf-8'
+  };
+}
+
+function postUsageLog(config, payload) {
+  return new Promise((resolve) => {
+    let url = null;
+    try {
+      url = new URL(config.endpoint);
+    }
+    catch {
+      resolve(false);
+      return;
+    }
+
+    if (url.protocol !== 'https:') {
+      resolve(false);
+      return;
+    }
+
+    const requestPayload = buildUsageLogRequest(config, payload);
+    const request = https.request(url, {
+      method: 'POST',
+      headers: {
+        'User-Agent': 'Fiber-MDB-Generator',
+        'Content-Type': requestPayload.contentType,
+        'Content-Length': Buffer.byteLength(requestPayload.body)
+      }
+    }, (response) => {
+      response.resume();
+      response.on('end', () => {
+        resolve(true);
+      });
+    });
+
+    request.on('error', () => resolve(false));
+    request.setTimeout(5000, () => {
+      request.destroy();
+      resolve(false);
+    });
+    request.write(requestPayload.body);
+    request.end();
+  });
+}
+
+async function maybeSendUsageLog() {
+  if (usageLogStarted || selfTestMode) {
+    return;
+  }
+
+  usageLogStarted = true;
+
+  try {
+    const config = getLocalUsageLogConfig() ?? await getRemoteUsageLogConfig();
+    if (!config?.endpoint) {
+      appendRuntimeLog('usage-log skipped no-endpoint');
+      return;
+    }
+
+    const sent = await postUsageLog(config, buildUsageLogPayload());
+    appendRuntimeLog(`usage-log ${sent ? 'sent' : 'skipped'}`);
+  }
+  catch (error) {
+    appendRuntimeLog(`usage-log-silent-error ${error?.message ?? error}`);
+  }
 }
 
 function downloadFile(url, destinationPath, options = {}, redirectCount = 0) {
@@ -3164,6 +3432,9 @@ app.whenReady().then(() => {
   appendRuntimeLog('app.whenReady');
   createSplashWindow();
   createWindow();
+  setTimeout(() => {
+    void maybeSendUsageLog();
+  }, 1200);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
