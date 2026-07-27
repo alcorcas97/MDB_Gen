@@ -1202,6 +1202,135 @@ async function extractComplexCheckHints(projectFolderPath) {
   }
 }
 
+function abbreviateComplexStreetName(name) {
+  let text = String(name ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) {
+    return text;
+  }
+
+  const streetPattern = /\b([A-ZÁÉÍÓÚÜÑ][A-Za-zÀ-ÿ]+(?:\s+[a-zA-ZÀ-ÿ]+){0,5}\s+[A-ZÁÉÍÓÚÜÑ]?[A-Za-zÀ-ÿ]*(?:straat|Straat|plein|Plein))\b/g;
+  text = text.replace(streetPattern, (streetName) => {
+    const words = streetName.split(/\s+/).filter(Boolean);
+    if (words.length <= 1) {
+      return streetName;
+    }
+
+    const last = words[words.length - 1];
+    const initials = words.slice(0, -1).map((word) => `${word[0]}.`);
+    return [...initials, last].join(' ');
+  });
+
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function compactAbbreviatedComplexName(name) {
+  return String(name ?? '')
+    .replace(/\s+en\s+/gi, '+')
+    .replace(/\b([A-Za-z])\.\s+/g, '$1.')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function pathExists(targetPath) {
+  try {
+    await fsp.access(targetPath);
+    return true;
+  }
+  catch {
+    return false;
+  }
+}
+
+async function getUniquePath(targetPath) {
+  if (!(await pathExists(targetPath))) {
+    return targetPath;
+  }
+
+  const parsed = path.parse(targetPath);
+  for (let index = 2; index < 100; index++) {
+    const candidate = path.join(parsed.dir, `${parsed.name}-${index}${parsed.ext}`);
+    if (!(await pathExists(candidate))) {
+      return candidate;
+    }
+  }
+
+  throw new Error(`No se ha podido calcular un nombre unico para ${targetPath}`);
+}
+
+async function normalizeLongComplexNames(projectFolderPath) {
+  const gebouwenFolder = path.join(projectFolderPath, 'Gebouwen');
+  if (!(await pathExists(gebouwenFolder))) {
+    return [];
+  }
+
+  const entries = await fsp.readdir(gebouwenFolder, { withFileTypes: true });
+  const renames = [];
+  const documentExtensions = new Set(['.pdf', '.doc', '.docx']);
+  const maxImporterPathLength = 178;
+  const maxComfortableFolderNameLength = 58;
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const oldFolderPath = path.join(gebouwenFolder, entry.name);
+    const files = await fsp.readdir(oldFolderPath, { withFileTypes: true }).catch(() => []);
+    const documentFiles = files.filter((file) => file.isFile() && documentExtensions.has(path.extname(file.name).toLowerCase()));
+    const hasTooLongDocumentPath = documentFiles.some((file) => path.join(oldFolderPath, file.name).length > maxImporterPathLength);
+    let abbreviatedName = abbreviateComplexStreetName(entry.name);
+    const firstExtension = documentFiles.length > 0 ? path.extname(documentFiles[0].name) : '.pdf';
+    if (path.join(gebouwenFolder, abbreviatedName, `${abbreviatedName}${firstExtension}`).length > maxImporterPathLength) {
+      abbreviatedName = compactAbbreviatedComplexName(abbreviatedName);
+    }
+
+    if (
+      abbreviatedName === entry.name ||
+      (
+        entry.name.length <= maxComfortableFolderNameLength &&
+        !hasTooLongDocumentPath
+      )
+    ) {
+      continue;
+    }
+
+    const newFolderPath = await getUniquePath(path.join(gebouwenFolder, abbreviatedName));
+    await fsp.rename(oldFolderPath, newFolderPath);
+
+    const actualNewFolderName = path.basename(newFolderPath);
+    const renamedFiles = [];
+    const renamedFolderFiles = await fsp.readdir(newFolderPath, { withFileTypes: true }).catch(() => []);
+    for (const file of renamedFolderFiles) {
+      if (!file.isFile()) {
+        continue;
+      }
+
+      const extension = path.extname(file.name);
+      if (!documentExtensions.has(extension.toLowerCase())) {
+        continue;
+      }
+
+      const currentFilePath = path.join(newFolderPath, file.name);
+      const preferredFilePath = path.join(newFolderPath, `${actualNewFolderName}${extension}`);
+      if (currentFilePath.toLowerCase() === preferredFilePath.toLowerCase()) {
+        continue;
+      }
+
+      const targetFilePath = await getUniquePath(preferredFilePath);
+      await fsp.rename(currentFilePath, targetFilePath);
+      renamedFiles.push(`${file.name} -> ${path.basename(targetFilePath)}`);
+    }
+
+    renames.push({
+      from: entry.name,
+      to: actualNewFolderName,
+      files: renamedFiles
+    });
+  }
+
+  return renames;
+}
+
 async function extractDempingContingencyItems(projectFolderPath) {
   const checkPath = await findProjectCheckPath(projectFolderPath);
   const html = await fsp.readFile(checkPath, 'utf8');
@@ -2669,6 +2798,18 @@ ipcMain.handle('mdb:rebuild-customer-complexes', async (_event, payload) => {
   });
 
   try {
+    const complexRenames = await normalizeLongComplexNames(payload.projectFolderPath);
+    if (complexRenames.length > 0) {
+      sendGenerationEvent({
+        type: 'log',
+        level: 'warning',
+        message: `Nombres HR acortados para evitar limites de ruta/importador:\n${complexRenames.map((item) => {
+          const fileInfo = item.files.length > 0 ? ` (${item.files.join(', ')})` : '';
+          return `- ${item.from} -> ${item.to}${fileInfo}`;
+        }).join('\n')}\n`
+      });
+    }
+
     await runPowerShellScript([
       '-FcPath',
       payload.fcPath,
@@ -3464,6 +3605,18 @@ ipcMain.handle('generation:run', async (_event, payload) => {
     type: 'status',
     message: 'Analizando DWG, vergunningen y estructura del proyecto...'
   });
+
+  const complexRenames = await normalizeLongComplexNames(payload.projectFolderPath);
+  if (complexRenames.length > 0) {
+    sendGenerationEvent({
+      type: 'log',
+      level: 'warning',
+      message: `Nombres HR acortados para evitar limites de ruta/importador:\n${complexRenames.map((item) => {
+        const fileInfo = item.files.length > 0 ? ` (${item.files.join(', ')})` : '';
+        return `- ${item.from} -> ${item.to}${fileInfo}`;
+      }).join('\n')}\n`
+    });
+  }
 
   const { extractProjectMetadata } = getProjectMetadataModule();
   const metadata = await extractProjectMetadata(payload.projectFolderPath);

@@ -219,8 +219,17 @@ function Normalize-StreetKey {
     $normalized = $normalized -replace '\?', ''
     $normalized = $normalized -replace 'CK', 'K'
     $normalized = $normalized -replace 'SSTRAAT\b', 'STRAAT'
+    $normalized = $normalized -replace '\bA\.?\s*CUYPSTRAAT\b', 'ALBERT CUYPSTRAAT'
+    $normalized = $normalized -replace '\bE\.?\s*J\.?\s*STEENSTRAAT\b', 'EERSTE JAN STEENSTRAAT'
+    $normalized = $normalized -replace '\bE\.?\s*V\.?\s*D\.?\s*HELSTSTRAAT\b', 'EERSTE VAN DER HELSTSTRAAT'
+    $normalized = $normalized -replace '\bF\.?\s*BOLSTRAAT\b', 'FERDINAND BOLSTRAAT'
+    $normalized = $normalized -replace '\bG\.?\s*FLINCKSTRAAT\b', 'GOVERT FLINKSTRAAT'
+    $normalized = $normalized -replace '\bG\.?\s*FLINKSTRAAT\b', 'GOVERT FLINKSTRAAT'
+    $normalized = $normalized -replace '\bG\.?\s*DOUSTRAAT\b', 'GERARD DOUSTRAAT'
+    $normalized = $normalized -replace '\bG\.?\s*DOUPLEIN\b', 'GERARD DOUPLEIN'
     $normalized = $normalized -replace '\bFERDINANDBOLSTRAAT\b', 'FERDINAND BOLSTRAAT'
     $normalized = $normalized -replace '\bALBERT CUPSTRAAT\b', 'ALBERT CUYPSTRAAT'
+    $normalized = $normalized -replace '\bA\.?\s*CUPSTRAAT\b', 'ALBERT CUYPSTRAAT'
 
     return $normalized
 }
@@ -366,6 +375,31 @@ function Get-HouseSuffixRangeValues {
         if ($startCode -le $endCode) {
             return @($startCode..$endCode | ForEach-Object { [string][char]$_ })
         }
+    }
+
+    if ($start -match '^[A-Z]$' -and $end -match '^(?<floor>\d+)$') {
+        $values = [System.Collections.Generic.List[string]]::new()
+        $values.Add($start)
+        $maxFloor = [int]$Matches.floor
+        for ($floor = 1; $floor -le $maxFloor; $floor++) {
+            $values.Add([string]$floor)
+        }
+        return @($values | Select-Object -Unique)
+    }
+
+    if ($start -match '^(?<prefix>[A-Z])$' -and $end -match '^(?<prefix>[A-Z])(?<floor>\d+)$') {
+        $prefix = $Matches.prefix
+        if ($start -ne $prefix) {
+            return @()
+        }
+        $values = [System.Collections.Generic.List[string]]::new()
+        $values.Add($start)
+        $values.Add(('{0}H' -f $prefix))
+        $maxFloor = [int]$Matches.floor
+        for ($floor = 1; $floor -le $maxFloor; $floor++) {
+            $values.Add(('{0}{1}' -f $prefix, $floor))
+        }
+        return @($values | Select-Object -Unique)
     }
 
     if ($start -eq 'H' -and $end -match '^(?<floor>\d+)(?<side>[A-Z]*)$') {
@@ -687,7 +721,7 @@ function Get-ComplexDefinitions {
 
     foreach ($folder in (Get-ChildItem -LiteralPath $gebouwenFolder -Directory | Sort-Object Name)) {
         $lastStreet = $null
-        foreach ($rawPart in ($folder.Name -split '\s+en\s+')) {
+        foreach ($rawPart in ($folder.Name -split '(?:\s+en\s+|\+)')) {
             $expandedParts = @(Expand-ComplexNamePart -PartText $rawPart -FallbackStreet $lastStreet)
             foreach ($part in $expandedParts) {
             $partText = $part.Trim()
@@ -778,9 +812,6 @@ function Get-ComplexDefinitions {
                     Number = $endReference.Number
                     Suffix = '2'
                 }
-            }
-            elseif ($isCompactRange -and $null -eq $startReference.Suffix -and $null -eq $endReference.Suffix) {
-                $exactSuffix = '<EMPTY>'
             }
 
             $definitions += [pscustomobject]@{
