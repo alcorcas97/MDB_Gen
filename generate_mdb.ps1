@@ -219,6 +219,8 @@ function Normalize-StreetKey {
     $normalized = $normalized -replace '\?', ''
     $normalized = $normalized -replace 'CK', 'K'
     $normalized = $normalized -replace 'SSTRAAT\b', 'STRAAT'
+    $normalized = $normalized -replace '\bFERDINANDBOLSTRAAT\b', 'FERDINAND BOLSTRAAT'
+    $normalized = $normalized -replace '\bALBERT CUPSTRAAT\b', 'ALBERT CUYPSTRAAT'
 
     return $normalized
 }
@@ -251,6 +253,10 @@ function Normalize-HouseSuffix {
 
     if ($normalized -eq '') {
         return $null
+    }
+
+    if ($normalized -eq '0') {
+        return 'O'
     }
 
     if ($normalized -match '^([A-Z])S$') {
@@ -309,6 +315,100 @@ function Parse-HouseReference {
         Number = $numberValue
         Suffix = Normalize-HouseSuffix $suffixText
     }
+}
+
+function Expand-ComplexNamePart {
+    param(
+        [string]$PartText,
+        [string]$FallbackStreet
+    )
+
+    $text = Normalize-Text $PartText
+    if ($null -eq $text) {
+        return @()
+    }
+
+    if ($null -ne $FallbackStreet -and $text -match '^\d') {
+        $text = '{0} {1}' -f $FallbackStreet, $text
+    }
+
+    if ($text -notmatch ',') {
+        return @($text)
+    }
+
+    if ($text -match '^(?<street>.+?)\s+(?<refs>\d+[A-Za-z0-9\s\-]*(?:\s*,\s*\d+[A-Za-z0-9\s\-]*)+)$') {
+        $street = $Matches.street.Trim()
+        return @(
+            $Matches.refs -split '\s*,\s*' |
+                Where-Object { $_.Trim() -ne '' } |
+                ForEach-Object { '{0} {1}' -f $street, $_.Trim() }
+        )
+    }
+
+    return @($text)
+}
+
+function Get-HouseSuffixRangeValues {
+    param(
+        [string]$StartSuffix,
+        [string]$EndSuffix
+    )
+
+    $start = Normalize-HouseSuffix $StartSuffix
+    $end = Normalize-HouseSuffix $EndSuffix
+    if ($null -eq $start -or $null -eq $end -or $start -eq $end) {
+        return @()
+    }
+
+    if ($start -match '^[A-Z]$' -and $end -match '^[A-Z]$') {
+        $startCode = [int][char]$start
+        $endCode = [int][char]$end
+        if ($startCode -le $endCode) {
+            return @($startCode..$endCode | ForEach-Object { [string][char]$_ })
+        }
+    }
+
+    if ($start -eq 'H' -and $end -match '^(?<floor>\d+)(?<side>[A-Z]*)$') {
+        $values = [System.Collections.Generic.List[string]]::new()
+        $values.Add('H')
+        $maxFloor = [int]$Matches.floor
+        $side = $Matches.side
+        for ($floor = 1; $floor -le $maxFloor; $floor++) {
+            if ($side -eq 'A' -or $side -eq 'V') {
+                $values.Add(('{0}{1}' -f $floor, $side))
+            }
+            else {
+                $values.Add([string]$floor)
+            }
+        }
+        return @($values | Select-Object -Unique)
+    }
+
+    if ($start -match '^(?<startPrefix>[A-Z]+)H$') {
+        $startPrefix = $Matches.startPrefix.Substring(0, 1)
+        if ($end -notmatch '^(?<endPrefix>[A-Z])(?<floor>\d+)') {
+            return @()
+        }
+        $endPrefix = $Matches.endPrefix
+        $maxFloor = [int]$Matches.floor
+        $startCode = [int][char]$startPrefix
+        $endCode = [int][char]$endPrefix
+        if ($startCode -le $endCode) {
+            $values = [System.Collections.Generic.List[string]]::new()
+            foreach ($code in $startCode..$endCode) {
+                $prefix = [string][char]$code
+                $values.Add(('{0}H' -f $prefix))
+                for ($floor = 1; $floor -le $maxFloor; $floor++) {
+                    $values.Add(('{0}{1}' -f $prefix, $floor))
+                    $values.Add(('{0}{1}A' -f $prefix, $floor))
+                    $values.Add(('{0}{1}V' -f $prefix, $floor))
+                }
+            }
+            return @($values | Select-Object -Unique)
+        }
+    }
+
+    return @()
 }
 
 function Compare-HouseReference {
@@ -586,7 +686,10 @@ function Get-ComplexDefinitions {
     }
 
     foreach ($folder in (Get-ChildItem -LiteralPath $gebouwenFolder -Directory | Sort-Object Name)) {
-        foreach ($part in ($folder.Name -split '\s+en\s+')) {
+        $lastStreet = $null
+        foreach ($rawPart in ($folder.Name -split '\s+en\s+')) {
+            $expandedParts = @(Expand-ComplexNamePart -PartText $rawPart -FallbackStreet $lastStreet)
+            foreach ($part in $expandedParts) {
             $partText = $part.Trim()
             if ($partText -eq '') {
                 continue
@@ -604,6 +707,14 @@ function Get-ComplexDefinitions {
                 $street = $Matches.street.Trim()
                 $startReferenceText = $Matches.start.Trim()
                 $endReferenceText = $Matches.end.Trim()
+            }
+            elseif ($partText -match ('^(?<street>.+?)\s+(?<start>{0})\s*(?:tm|t\/m)\s*(?<end>[A-Za-z0-9]+(?:\s*-\s*[A-Za-z0-9]+)*)$' -f $houseReferencePattern)) {
+                $street = $Matches.street.Trim()
+                $startReferenceText = $Matches.start.Trim()
+                $startForSuffixOnlyEnd = Parse-HouseReference $startReferenceText
+                if ($null -ne $startForSuffixOnlyEnd) {
+                    $endReferenceText = '{0}-{1}' -f $startForSuffixOnlyEnd.Number, $Matches.end.Trim()
+                }
             }
             elseif ($partText -match '^(?<street>.+?)\s+(?<start>\d+[A-Za-z]*)\s*-\s*(?<end>\d+[A-Za-z]*)$') {
                 $street = $Matches.street.Trim()
@@ -623,6 +734,8 @@ function Get-ComplexDefinitions {
                 continue
             }
 
+            $lastStreet = $street
+
             $startReference = Parse-HouseReference $startReferenceText
             $endReference = Parse-HouseReference $endReferenceText
             if ($null -eq $startReference -or $null -eq $endReference) {
@@ -641,6 +754,11 @@ function Get-ComplexDefinitions {
                         Suffix = Normalize-HouseSuffix $suffixParts[-1]
                     }
                 }
+            }
+
+            $allowedSuffixes = @()
+            if ($startReference.Number -eq $endReference.Number -and $null -ne $startReference.Suffix -and $null -ne $endReference.Suffix) {
+                $allowedSuffixes = @(Get-HouseSuffixRangeValues -StartSuffix $startReference.Suffix -EndSuffix $endReference.Suffix)
             }
 
             if ((Compare-HouseReference -NumberA $startReference.Number -SuffixA $startReference.Suffix -NumberB $endReference.Number -SuffixB $endReference.Suffix) -gt 0) {
@@ -674,11 +792,82 @@ function Get-ComplexDefinitions {
                 Step         = $step
                 RequiredParity = $requiredParity
                 ExactSuffix  = $exactSuffix
+                AllowedSuffixes = @($allowedSuffixes)
+            }
             }
         }
     }
 
     return $definitions
+}
+
+function Get-ComplexFilesystemReviewItems {
+    param([string]$ProjectFolder)
+
+    $items = @()
+    if ($null -eq (Normalize-Text $ProjectFolder)) {
+        return $items
+    }
+
+    $checkPath = Join-Path -Path $ProjectFolder -ChildPath 'Checks.htm'
+    if (-not (Test-Path -LiteralPath $checkPath)) {
+        return $items
+    }
+
+    $html = Get-Content -LiteralPath $checkPath -Raw -Encoding UTF8
+    foreach ($rowMatch in [regex]::Matches($html, '<tr[^>]*>([\s\S]*?)</tr>', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
+        $cells = @()
+        foreach ($cellMatch in [regex]::Matches($rowMatch.Groups[1].Value, '<(?:th|td)[^>]*>([\s\S]*?)</(?:th|td)>', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
+            $cellText = $cellMatch.Groups[1].Value -replace '<[^>]+>', ' '
+            $cellText = [System.Net.WebUtility]::HtmlDecode($cellText)
+            $cellText = ($cellText -replace '\s+', ' ').Trim()
+            if ($cellText -ne '') {
+                $cells += $cellText
+            }
+        }
+
+        if ($cells.Count -eq 0) {
+            continue
+        }
+
+        $message = ($cells -join ' | ')
+        if ($message -eq 'Message' -or $message -notmatch '(M-30033|M-30088|path .+ should not exceed)') {
+            continue
+        }
+
+        if ($message -match '\.(bak|adt)\b') {
+            continue
+        }
+
+        $folderName = $null
+        if ($message -match "\\Gebouwen\\(?<name>[^']+)'") {
+            $folderName = $Matches.name
+        }
+        elseif ($message -match "\\Gebouwen\\(?<name>.+?)\s+is not used") {
+            $folderName = $Matches.name
+        }
+        elseif ($message -match "Gebouwen\\(?<name>.+?)\\") {
+            $folderName = $Matches.name
+        }
+
+        $reason = if ($message -match 'M-30033') {
+            'El check espera una carpeta que no encuentra o ha quedado truncada.'
+        }
+        elseif ($message -match 'should not exceed') {
+            'La ruta del PDF supera el limite del importador; requiere acortar carpeta/archivo.'
+        }
+        else {
+            'El check marca la carpeta como no utilizada por el importador.'
+        }
+
+        $items += [pscustomobject]@{
+            Folder = Normalize-Text $folderName
+            Reason = $reason
+            Message = $message
+        }
+    }
+
+    return $items
 }
 
 function Test-HouseMatchesComplexDefinition {
@@ -707,6 +896,10 @@ function Test-HouseMatchesComplexDefinition {
     }
 
     $normalizedSuffix = Normalize-HouseSuffix $HouseSuffix
+    if ($null -ne $Definition.AllowedSuffixes -and @($Definition.AllowedSuffixes).Count -gt 0) {
+        return ($normalizedSuffix -in @($Definition.AllowedSuffixes))
+    }
+
     if ($Definition.ExactSuffix -eq '<EMPTY>') {
         if ($null -ne $normalizedSuffix) {
             return $false
@@ -2707,8 +2900,13 @@ if ($ExportComplexAssignmentsOnly) {
         throw 'Falta -ComplexAssignmentsOutputPath para exportar los COMPLEX.'
     }
 
+    $complexAssignmentRows = @(Build-ComplexAssignments -Model $model -ComplexDefinitions $complexDefinitions)
     $assignments = [pscustomobject]@{
-        Assignments = @(Build-ComplexAssignments -Model $model -ComplexDefinitions $complexDefinitions)
+        Assignments = @($complexAssignmentRows)
+        ManualReview = [pscustomobject]@{
+            UnassignedConnections = @($complexAssignmentRows | Where-Object { $null -eq (Normalize-Text $_.Complex) })
+            FilesystemProblems = @(Get-ComplexFilesystemReviewItems -ProjectFolder $resolvedProjectFolder)
+        }
         ComplexDefinitions = @($complexDefinitions | ForEach-Object {
             [pscustomobject]@{
                 Name      = $_.Name
@@ -2716,6 +2914,7 @@ if ($ExportComplexAssignmentsOnly) {
                 Start     = ('{0}{1}' -f $_.Start.Number, $(if ($null -ne $_.Start.Suffix) { '-' + $_.Start.Suffix } else { '' }))
                 End       = ('{0}{1}' -f $_.End.Number, $(if ($null -ne $_.End.Suffix) { '-' + $_.End.Suffix } else { '' }))
                 StreetKey = $_.StreetKey
+                AllowedSuffixes = @($_.AllowedSuffixes)
             }
         })
     }

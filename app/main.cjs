@@ -2297,6 +2297,14 @@ ipcMain.handle('mdb:update-fc', async (_event, payload) => {
       assignmentsPath
     ]);
 
+    let complexAssignmentsPayload = null;
+    try {
+      complexAssignmentsPayload = JSON.parse(await fsp.readFile(assignmentsPath, 'utf8'));
+    }
+    catch {
+      complexAssignmentsPayload = null;
+    }
+
     const result = await runMdbToolsJson([
       '-Mode',
       'ApplyFcRefresh',
@@ -2696,6 +2704,36 @@ ipcMain.handle('mdb:rebuild-customer-complexes', async (_event, payload) => {
       });
     }
 
+    const filesystemProblems = complexAssignmentsPayload?.ManualReview?.FilesystemProblems;
+    if (Array.isArray(filesystemProblems) && filesystemProblems.length > 0) {
+      const lines = filesystemProblems
+        .filter((item) => !/\.(bak|adt)\b/i.test(String(item?.Message ?? '')))
+        .slice(0, 80)
+        .map((item) => `- ${item?.Folder ?? 'sin carpeta'}: ${item?.Reason ?? item?.Message ?? 'revisar manualmente'}`);
+
+      if (lines.length > 0) {
+        sendGenerationEvent({
+          type: 'log',
+          level: 'warning',
+          message: `Revision manual Filesystem problems:\n${lines.join('\n')}\n`
+        });
+      }
+    }
+
+    const unassignedConnections = complexAssignmentsPayload?.ManualReview?.UnassignedConnections;
+    if (Array.isArray(unassignedConnections) && unassignedConnections.length > 0) {
+      const lines = unassignedConnections.slice(0, 120).map((item) => {
+        const address = [item?.Street, item?.HouseNumber, item?.HouseSuffix, item?.Room].filter(Boolean).join(' ');
+        return `- ${item?.CableId ?? 'sin cable'}: ${address || 'sin direccion'}`
+      });
+
+      sendGenerationEvent({
+        type: 'log',
+        level: 'warning',
+        message: `Revision manual COMPLEX: conexiones sin carpeta HR procesable (${unassignedConnections.length}):\n${lines.join('\n')}\n`
+      });
+    }
+
     const complexCheckHints = await extractComplexCheckHints(payload.projectFolderPath);
     if (complexCheckHints) {
       if (complexCheckHints.m30131Rows.length > 0) {
@@ -2716,11 +2754,14 @@ ipcMain.handle('mdb:rebuild-customer-complexes', async (_event, payload) => {
       }
 
       if (complexCheckHints.filesystemRows.length > 0) {
-        sendGenerationEvent({
-          type: 'log',
-          level: 'warning',
-          message: `Pistas Checks "Filesystem problems":\n${complexCheckHints.filesystemRows.slice(0, 80).map((line) => `- ${line}`).join('\n')}\n`
-        });
+        const relevantFilesystemRows = complexCheckHints.filesystemRows.filter((line) => !/\.(bak|adt)\b/i.test(line));
+        if (relevantFilesystemRows.length > 0) {
+          sendGenerationEvent({
+            type: 'log',
+            level: 'warning',
+            message: `Pistas Checks "Filesystem problems":\n${relevantFilesystemRows.slice(0, 80).map((line) => `- ${line}`).join('\n')}\n`
+          });
+        }
       }
     }
 
