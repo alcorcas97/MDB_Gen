@@ -1103,9 +1103,9 @@ async function drawAccessnetWithoutAddress() {
 
 async function applyDempingContingency() {
   await runProjectTool({
-    startMessage: 'Buscando errores M-30212 y M-30005 en el check...',
+    startMessage: 'Buscando errores M-30212, M-30005 y M-30090 en el check...',
     successMessage: (result) => `Contingencia demping aplicada: ${result.updatedRows} clientes y ${result.updatedFields} campos.`,
-    successLog: (result) => `Contingencia demping completada usando ${result.checkPath}. M-30212: ${result.m30212Count}. M-30005: ${result.m30005Count}. Clientes actualizados: ${result.updatedRows}. Campos tocados: ${result.updatedFields}. No encontrados: ${result.notMatchedCount ?? 0}.`,
+    successLog: (result) => `Contingencia demping completada usando ${result.checkPath}. M-30212: ${result.m30212Count}. M-30005: ${result.m30005Count}. M-30090: ${result.m30090Count}. Clientes actualizados: ${result.updatedRows}. Campos tocados: ${result.updatedFields}. No encontrados: ${result.notMatchedCount ?? 0}.`,
     action: (payload) => fiberDesktopApi.applyDempingContingency(payload)
   });
 }

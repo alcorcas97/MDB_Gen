@@ -1258,11 +1258,34 @@ async function extractDempingContingencyItems(projectFolderPath) {
     }
   }
 
+  for (const row of extractRowsFromCheckSection(html, 'M-30090')) {
+    const clearFields = [];
+    const klantId = getCheckValue(row, ['klant_id', 'klantid', 'klant id']);
+    const kabel = getCheckValue(row, ['kabel']);
+
+    for (const [field, accessField] of Object.entries(dempingFieldMap)) {
+      const rawValue = String(getCheckValue(row, [field]) ?? '').trim();
+      if (rawValue) {
+        clearFields.push(accessField);
+      }
+    }
+
+    if ((klantId || kabel) && clearFields.length > 0) {
+      items.push({
+        errorCode: 'M-30090',
+        klantId,
+        kabel,
+        clearFields
+      });
+    }
+  }
+
   return {
     checkPath,
     items,
     m30212Count: items.filter((item) => item.errorCode === 'M-30212').length,
-    m30005Count: items.filter((item) => item.errorCode === 'M-30005').length
+    m30005Count: items.filter((item) => item.errorCode === 'M-30005').length,
+    m30090Count: items.filter((item) => item.errorCode === 'M-30090').length
   };
 }
 
@@ -2018,13 +2041,13 @@ ipcMain.handle('mdb:apply-demping-contingency', async (_event, payload) => {
 
   sendGenerationEvent({
     type: 'status',
-    message: 'Buscando Checks.htm y leyendo errores M-30212 / M-30005...'
+    message: 'Buscando Checks.htm y leyendo errores M-30212 / M-30005 / M-30090...'
   });
 
   const contingency = await extractDempingContingencyItems(payload.projectFolderPath);
 
   if (contingency.items.length === 0) {
-    throw new Error(`No se han encontrado filas M-30212 ni M-30005 con dempings corregibles en ${contingency.checkPath}.`);
+    throw new Error(`No se han encontrado filas M-30212, M-30005 ni M-30090 con dempings corregibles en ${contingency.checkPath}.`);
   }
 
   const assignmentsPath = path.join(
@@ -2058,7 +2081,7 @@ ipcMain.handle('mdb:apply-demping-contingency', async (_event, payload) => {
     sendGenerationEvent({
       type: 'log',
       level: 'info',
-      message: `Contingencia demping: M-30212=${contingency.m30212Count}, M-30005=${contingency.m30005Count}. Clientes actualizados=${result.updatedRows}, campos=${result.updatedFields}, no encontrados=${result.notMatchedCount ?? 0}.\n`
+      message: `Contingencia demping: M-30212=${contingency.m30212Count}, M-30005=${contingency.m30005Count}, M-30090=${contingency.m30090Count}. Clientes actualizados=${result.updatedRows}, campos=${result.updatedFields}, no encontrados=${result.notMatchedCount ?? 0}.\n`
     });
 
     sendGenerationEvent({
@@ -2071,6 +2094,7 @@ ipcMain.handle('mdb:apply-demping-contingency', async (_event, payload) => {
       checkPath: contingency.checkPath,
       m30212Count: contingency.m30212Count,
       m30005Count: contingency.m30005Count,
+      m30090Count: contingency.m30090Count,
       updatedRows: result.updatedRows,
       updatedFields: result.updatedFields,
       notMatchedCount: result.notMatchedCount ?? 0

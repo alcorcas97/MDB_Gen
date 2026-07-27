@@ -976,6 +976,7 @@ function Apply-DempingContingency {
         $klantId = Normalize-Text (Get-JsonPropertyValue -Object $item -Names @('klantId', 'klant_id', 'klantid'))
         $kabel = Normalize-Text (Get-JsonPropertyValue -Object $item -Names @('kabel', 'Kabel'))
         $fields = Get-JsonPropertyValue -Object $item -Names @('fields', 'Fields')
+        $clearFields = @(Get-JsonPropertyValue -Object $item -Names @('clearFields', 'ClearFields'))
         $whereParts = @()
 
         if ($null -ne $klantId) {
@@ -1021,6 +1022,28 @@ function Apply-DempingContingency {
                 }
 
                 $field.Value = [double]$targetValue
+                $updatedFields++
+                $rowChanged = $true
+            }
+
+            foreach ($fieldName in $clearFields) {
+                $normalizedFieldName = Normalize-Text $fieldName
+                if ($null -eq $normalizedFieldName -or -not ($normalizedFieldName -in $allowedFields)) {
+                    continue
+                }
+
+                $field = $recordset.Fields($normalizedFieldName)
+                $currentValue = Normalize-Text $field.Value
+                if ($null -eq $currentValue) {
+                    continue
+                }
+
+                if ($field.AllowZeroLength) {
+                    $field.Value = ''
+                }
+                else {
+                    $field.Value = [System.DBNull]::Value
+                }
                 $updatedFields++
                 $rowChanged = $true
             }
