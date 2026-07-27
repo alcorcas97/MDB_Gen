@@ -62,6 +62,64 @@ function Resolve-CustomerCableType {
     return '2V_DBC_PR01'
 }
 
+function Get-AllowedStatusLocations {
+    param([string]$DeliveryStatus)
+
+    switch (Normalize-Text $DeliveryStatus) {
+        '1'  { return @('GV') }
+        '31' { return @('GV') }
+        '2'  { return @('MTK', 'WNK', 'ANDE', 'KLDR') }
+        '5'  { return @('EG', 'GL') }
+        '35' { return @('EG', 'GL') }
+        '14' { return @('RESV') }
+        '34' { return @('RESV') }
+        '33' { return @('IHB') }
+        '11' { return @('SMK', 'SWON') }
+        '0'  { return @() }
+        '30' { return @() }
+        default { return @() }
+    }
+}
+
+function Resolve-StatusFtuLocation {
+    param(
+        [string]$DeliveryStatus,
+        [object]$CableId,
+        [object]$AddressLabel
+    )
+
+    $allowedLocations = @(Get-AllowedStatusLocations -DeliveryStatus $DeliveryStatus)
+    if ($allowedLocations.Count -eq 0) {
+        return [pscustomobject]@{
+            Location    = $null
+            IsAmbiguous = $false
+            Allowed     = @()
+            Warning     = $null
+        }
+    }
+
+    if ($allowedLocations.Count -eq 1) {
+        return [pscustomobject]@{
+            Location    = $allowedLocations[0]
+            IsAmbiguous = $false
+            Allowed     = $allowedLocations
+            Warning     = $null
+        }
+    }
+
+    return [pscustomobject]@{
+        Location    = 'XXXX'
+        IsAmbiguous = $true
+        Allowed     = $allowedLocations
+        Warning     = [pscustomobject]@{
+            CableId        = Normalize-Text $CableId
+            AddressCode    = Normalize-Text $AddressLabel
+            DeliveryStatus = Normalize-Text $DeliveryStatus
+            Allowed        = @($allowedLocations)
+        }
+    }
+}
+
 function Normalize-Key {
     param([object]$Value)
 
@@ -201,6 +259,10 @@ function Get-HouseSuffixRank {
 
     if ($normalizedSuffix -eq 'H') {
         return 1
+    }
+
+    if ($normalizedSuffix -match '^(\d+)[A-Z]*$') {
+        return 10 + [int]$Matches[1]
     }
 
     if ($normalizedSuffix -match '^\d+$') {
@@ -523,8 +585,11 @@ function Get-ComplexDefinitions {
             $startReferenceText = $null
             $endReferenceText = $null
             $isCompactRange = $false
+            $isExactReference = $false
 
-            if ($partText -match '^(?<street>.+?)\s+(?<start>\d+(?:\s*-\s*[A-Za-z0-9]+|[A-Za-z]+)?)\s*(?:tm|t\/m)\s*(?<end>\d+(?:\s*-\s*[A-Za-z0-9]+|[A-Za-z]+)?)$') {
+            $houseReferencePattern = '\d+(?:(?:\s*-\s*|(?=[A-Za-z]))[A-Za-z0-9]+)*'
+
+            if ($partText -match ('^(?<street>.+?)\s+(?<start>{0})\s*(?:tm|t\/m)\s*(?<end>{0})$' -f $houseReferencePattern)) {
                 $street = $Matches.street.Trim()
                 $startReferenceText = $Matches.start.Trim()
                 $endReferenceText = $Matches.end.Trim()
@@ -535,6 +600,13 @@ function Get-ComplexDefinitions {
                 $endReferenceText = $Matches.end.Trim()
                 $isCompactRange = $true
             }
+            elseif ($partText -match ('^(?<street>.+?)\s+(?<start>{0})$' -f $houseReferencePattern)) {
+                $street = $Matches.street.Trim()
+                $startReferenceText = $Matches.start.Trim()
+                $endReferenceText = $Matches.start.Trim()
+                $isCompactRange = $true
+                $isExactReference = $true
+            }
 
             if ($null -eq $street) {
                 continue
@@ -544,6 +616,20 @@ function Get-ComplexDefinitions {
             $endReference = Parse-HouseReference $endReferenceText
             if ($null -eq $startReference -or $null -eq $endReference) {
                 continue
+            }
+
+            if ($isExactReference -and $startReference.Number -eq $endReference.Number -and $null -ne $startReference.Suffix -and $startReference.Suffix.Contains('-')) {
+                $suffixParts = @($startReference.Suffix -split '-' | Where-Object { $null -ne (Normalize-HouseSuffix $_) })
+                if ($suffixParts.Count -ge 2) {
+                    $startReference = [pscustomobject]@{
+                        Number = $startReference.Number
+                        Suffix = Normalize-HouseSuffix $suffixParts[0]
+                    }
+                    $endReference = [pscustomobject]@{
+                        Number = $endReference.Number
+                        Suffix = Normalize-HouseSuffix $suffixParts[-1]
+                    }
+                }
             }
 
             if ((Compare-HouseReference -NumberA $startReference.Number -SuffixA $startReference.Suffix -NumberB $endReference.Number -SuffixB $endReference.Suffix) -gt 0) {
@@ -635,6 +721,7 @@ function Resolve-ComplexName {
         [string]$Street,
         [object]$HouseNumber,
         [string]$HouseSuffix,
+        [string]$Room,
         [object[]]$Definitions
     )
 
@@ -649,13 +736,29 @@ function Resolve-ComplexName {
         return $null
     }
 
+    $suffixCandidates = [System.Collections.Generic.List[string]]::new()
+    $normalizedHouseSuffix = Normalize-HouseSuffix $HouseSuffix
+    $normalizedRoom = Normalize-HouseSuffix $Room
+    if ($null -ne $normalizedHouseSuffix) {
+        $suffixCandidates.Add($normalizedHouseSuffix)
+    }
+    if ($null -ne $normalizedHouseSuffix -and $null -ne $normalizedRoom) {
+        $suffixCandidates.Add(('{0}-{1}' -f $normalizedHouseSuffix, $normalizedRoom))
+    }
+    if ($null -eq $normalizedHouseSuffix -and $null -ne $normalizedRoom) {
+        $suffixCandidates.Add($normalizedRoom)
+    }
+    $suffixCandidates.Add($null)
+
     foreach ($definition in $Definitions) {
         if ($definition.StreetKey -ne $streetKey) {
             continue
         }
 
-        if (Test-HouseMatchesComplexDefinition -HouseNumberValue $houseNumberValue -HouseSuffix $HouseSuffix -Definition $definition) {
-            return $definition.Name
+        foreach ($candidateSuffix in @($suffixCandidates | Select-Object -Unique)) {
+            if (Test-HouseMatchesComplexDefinition -HouseNumberValue $houseNumberValue -HouseSuffix $candidateSuffix -Definition $definition) {
+                return $definition.Name
+            }
         }
     }
 
@@ -1101,6 +1204,26 @@ function Set-DaoFieldValue {
     ) | Out-Null
 }
 
+function Limit-AccessTextValue {
+    param(
+        [__ComObject]$Field,
+        [object]$Value
+    )
+
+    $normalizedText = Normalize-Text $Value
+    if ($null -eq $normalizedText) {
+        return $null
+    }
+
+    $fieldType = [int]$Field.Type
+    $fieldSize = [int]$Field.Size
+    if ($fieldType -eq 10 -and $fieldSize -gt 0 -and $normalizedText.Length -gt $fieldSize) {
+        return $normalizedText.Substring(0, $fieldSize)
+    }
+
+    return $normalizedText
+}
+
 function Set-AccessFieldValue {
     param(
         [__ComObject]$Recordset,
@@ -1122,7 +1245,7 @@ function Set-AccessFieldValue {
             return
         }
 
-        $normalizedText = Normalize-Text $Value
+        $normalizedText = Limit-AccessTextValue -Field $field -Value $Value
         if ($null -eq $normalizedText) {
             return
         }
@@ -1610,6 +1733,7 @@ function Build-ProjectModel {
     }
 
     $customers = @()
+    $ftuReviewWarnings = [System.Collections.Generic.List[object]]::new()
     foreach ($bcRow in $BcRows) {
         $key = Normalize-Key $bcRow.CableId
         if ($null -eq $key -or -not $fcByCable.ContainsKey($key)) {
@@ -1619,6 +1743,15 @@ function Build-ProjectModel {
         $fcRow = $fcByCable[$key]
         $dpInfo = Parse-DpLabel $fcRow.DpLabel
         $ftuType = Normalize-Text $bcRow.FtuType
+        $effectiveDeliveryStatus = Normalize-Text $bcRow.DeliveryStatus
+        if ($null -eq $effectiveDeliveryStatus) {
+            $effectiveDeliveryStatus = Normalize-Text $fcRow.DeliveryStatus
+        }
+        $addressLabel = Get-AddressLabel -Postcode $bcRow.Postcode -HouseNumber $bcRow.HouseNumber -HouseSuffix $bcRow.HouseSuffix
+        $ftuResolution = Resolve-StatusFtuLocation -DeliveryStatus $effectiveDeliveryStatus -CableId $bcRow.CableId -AddressLabel $addressLabel
+        if ($ftuResolution.IsAmbiguous -and $null -ne $ftuResolution.Warning) {
+            $ftuReviewWarnings.Add($ftuResolution.Warning)
+        }
 
         $customers += [pscustomobject]@{
             CableId            = $bcRow.CableId
@@ -1632,10 +1765,13 @@ function Build-ProjectModel {
             HouseSuffix        = $bcRow.HouseSuffix
             Room               = $bcRow.Room
             Street             = $fcRow.Street
-            FtuLocation        = Normalize-UpperStatus $fcRow.FtuLocation
+            FtuLocation        = Normalize-UpperStatus $ftuResolution.Location
+            SourceFtuLocation  = Normalize-UpperStatus $fcRow.FtuLocation
+            FtuReviewRequired  = [bool]$ftuResolution.IsAmbiguous
+            FtuAllowedLocations = @($ftuResolution.Allowed)
             FtuType            = $ftuType
-            StatusIs2          = ((Normalize-Text $bcRow.DeliveryStatus) -eq '2')
-            DeliveryStatus     = $bcRow.DeliveryStatus
+            StatusIs2          = ($effectiveDeliveryStatus -eq '2')
+            DeliveryStatus     = $effectiveDeliveryStatus
             DeliveryDate       = $bcRow.DeliveryDate
             PlannedDate        = $bcRow.PlannedDate
             Notes              = $bcRow.Notes
@@ -1645,7 +1781,7 @@ function Build-ProjectModel {
             Powermeter         = $fcRow.Powermeter
             IpFiberValue       = $fcRow.IpFiberValue
             Measurement        = if ($null -ne $fcRow.Powermeter) { $fcRow.Powermeter } else { $fcRow.IpFiberValue }
-            AddressLabel       = Get-AddressLabel -Postcode $bcRow.Postcode -HouseNumber $bcRow.HouseNumber -HouseSuffix $bcRow.HouseSuffix
+            AddressLabel       = $addressLabel
             DropLocationLabel  = Get-DropLocationLabel -Postcode $bcRow.Postcode -HouseNumber $bcRow.HouseNumber -HouseSuffix $bcRow.HouseSuffix -Room $bcRow.Room
             InstallDate        = $bcRow.DeliveryDate
         }
@@ -1741,6 +1877,7 @@ function Build-ProjectModel {
         ProjectNumber = $projectNumber
         Customers     = $customers
         Chains        = $chains
+        FtuReviewWarnings = @($ftuReviewWarnings)
     }
 }
 
@@ -2053,7 +2190,7 @@ function Build-KlantRows {
     foreach ($customer in ($Model.Customers | Sort-Object Fiber, CableId)) {
         $houseNumber = Normalize-Text $customer.HouseNumber
         $houseNumberValue = Try-ParseHouseNumber $houseNumber
-        $complexName = Resolve-ComplexName -Street $customer.Street -HouseNumber $customer.HouseNumber -HouseSuffix $customer.HouseSuffix -Definitions $ComplexDefinitions
+        $complexName = Resolve-ComplexName -Street $customer.Street -HouseNumber $customer.HouseNumber -HouseSuffix $customer.HouseSuffix -Room $customer.Room -Definitions $ComplexDefinitions
 
         $rows += [pscustomobject]@{
             ID               = $id
@@ -2101,7 +2238,8 @@ function Build-ComplexAssignments {
             Street      = $customer.Street
             HouseNumber = $customer.HouseNumber
             HouseSuffix = $customer.HouseSuffix
-            Complex     = Resolve-ComplexName -Street $customer.Street -HouseNumber $customer.HouseNumber -HouseSuffix $customer.HouseSuffix -Definitions $ComplexDefinitions
+            Room        = $customer.Room
+            Complex     = Resolve-ComplexName -Street $customer.Street -HouseNumber $customer.HouseNumber -HouseSuffix $customer.HouseSuffix -Room $customer.Room -Definitions $ComplexDefinitions
         }
     }
 
@@ -2148,6 +2286,9 @@ function Build-FcUpdateAssignments {
             $effectiveDeliveryStatus = Normalize-Text $bcMatch.DeliveryStatus
         }
 
+        $addressLabel = Get-AddressLabel -Postcode $fcRow.Postcode -HouseNumber $fcRow.HouseNumber -HouseSuffix $fcRow.HouseSuffix
+        $ftuResolution = Resolve-StatusFtuLocation -DeliveryStatus $effectiveDeliveryStatus -CableId $fcRow.CableId -AddressLabel $addressLabel
+
         $rows += [pscustomobject]@{
             CableId          = $fcRow.CableId
             Postcode         = $fcRow.Postcode
@@ -2155,7 +2296,10 @@ function Build-FcUpdateAssignments {
             HouseSuffix      = $fcRow.HouseSuffix
             Room             = $fcRow.Room
             AddressMatchKey  = $fcAddressKey
-            FtuLocation      = Normalize-UpperStatus $fcRow.FtuLocation
+            FtuLocation      = Normalize-UpperStatus $ftuResolution.Location
+            SourceFtuLocation = Normalize-UpperStatus $fcRow.FtuLocation
+            FtuReviewRequired = [bool]$ftuResolution.IsAmbiguous
+            FtuAllowedLocations = @($ftuResolution.Allowed)
             DeliveryStatus   = $effectiveDeliveryStatus
             StatusIs2        = ($effectiveDeliveryStatus -eq '2')
             Powermeter       = $fcRow.Powermeter
@@ -2163,6 +2307,7 @@ function Build-FcUpdateAssignments {
             Measurement      = if ($null -ne $fcRow.Powermeter) { $fcRow.Powermeter } else { $fcRow.IpFiberValue }
             DeliveryStatusFc = Normalize-Text $fcRow.DeliveryStatus
             DeliveryStatusBc = if ($null -ne $bcMatch) { Normalize-Text $bcMatch.DeliveryStatus } else { $null }
+            FtuReviewWarning = $ftuResolution.Warning
         }
     }
 
@@ -2398,6 +2543,7 @@ function Build-FcRefreshData {
             Customers = @($Model.Customers).Count
             Chains    = @($Model.Chains).Count
         }
+        FtuReviewWarnings = @($Model.FtuReviewWarnings)
         TableRows = [pscustomobject]@{
             Kabel = @($TableRows.Kabel)
             Klant = @($TableRows.Klant)
@@ -2435,6 +2581,7 @@ function Build-RiserData {
         ProjectLabel  = Normalize-Text $Model.ProjectLabel
         ProjectNumber = if ($null -ne (Normalize-Text $Model.ProjectNumber)) { Normalize-Text $Model.ProjectNumber } else { Normalize-Text (($FcRows | Select-Object -First 1).ProjectNumber) }
         DpLabels      = @($connections | ForEach-Object { Normalize-Text $_.DpLabel } | Where-Object { $null -ne $_ } | Sort-Object -Unique)
+        FtuReviewWarnings = @($Model.FtuReviewWarnings)
         Connections   = $connections
     }
 }
@@ -2549,8 +2696,19 @@ if ($ExportComplexAssignmentsOnly) {
         throw 'Falta -ComplexAssignmentsOutputPath para exportar los COMPLEX.'
     }
 
-    $assignments = @(Build-ComplexAssignments -Model $model -ComplexDefinitions $complexDefinitions)
-    $assignmentsJson = ConvertTo-Json -InputObject $assignments -Depth 6
+    $assignments = [pscustomobject]@{
+        Assignments = @(Build-ComplexAssignments -Model $model -ComplexDefinitions $complexDefinitions)
+        ComplexDefinitions = @($complexDefinitions | ForEach-Object {
+            [pscustomobject]@{
+                Name      = $_.Name
+                Street    = $_.Street
+                Start     = ('{0}{1}' -f $_.Start.Number, $(if ($null -ne $_.Start.Suffix) { '-' + $_.Start.Suffix } else { '' }))
+                End       = ('{0}{1}' -f $_.End.Number, $(if ($null -ne $_.End.Suffix) { '-' + $_.End.Suffix } else { '' }))
+                StreetKey = $_.StreetKey
+            }
+        })
+    }
+    $assignmentsJson = ConvertTo-Json -InputObject $assignments -Depth 8
     Set-Content -LiteralPath $ComplexAssignmentsOutputPath -Value $assignmentsJson -Encoding UTF8
     Write-Output "Asignaciones de COMPLEX exportadas en $ComplexAssignmentsOutputPath"
     return
@@ -2578,6 +2736,31 @@ $tableRows = @{
     Kabel       = @(Build-KabelRows -Model $model)
     Klant       = @(Build-KlantRows -Model $model -ComplexDefinitions $complexDefinitions)
     Las         = @(Build-LasRows -Model $model)
+}
+
+if (@($model.FtuReviewWarnings).Count -gt 0) {
+    Write-Host 'Revisar manualmente estas conexiones con FTU locatie ambiguo por status:'
+    foreach ($warning in @($model.FtuReviewWarnings | Select-Object -First 80)) {
+        Write-Host ('- {0} [{1}]: status {2} permite {3}; se ha puesto XXXX' -f `
+            (Normalize-Text $warning.CableId), `
+            (Normalize-Text $warning.AddressCode), `
+            (Normalize-Text $warning.DeliveryStatus), `
+            (@($warning.Allowed) -join '/'))
+    }
+}
+
+$allComplexDefinitionNames = @($complexDefinitions | ForEach-Object { Normalize-Text $_.Name } | Where-Object { $null -ne $_ } | Sort-Object -Unique)
+$usedComplexNames = @($tableRows.Klant | ForEach-Object { Normalize-Text $_.COMPLEX } | Where-Object { $null -ne $_ } | Sort-Object -Unique)
+$usedComplexLookup = @{}
+foreach ($complexName in $usedComplexNames) {
+    $usedComplexLookup[$complexName] = $true
+}
+$unusedComplexFolders = @($allComplexDefinitionNames | Where-Object { -not $usedComplexLookup.ContainsKey($_) })
+if ($unusedComplexFolders.Count -gt 0) {
+    Write-Host 'Carpetas de Gebouwen no utilizadas para COMPLEX:'
+    foreach ($folderName in @($unusedComplexFolders | Select-Object -First 120)) {
+        Write-Host ('- {0}' -f $folderName)
+    }
 }
 
 if ($ExportConnectionSyncDataOnly) {

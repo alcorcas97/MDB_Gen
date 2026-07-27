@@ -1156,6 +1156,52 @@ function extractRowsFromCheckSection(html, code) {
   return rows;
 }
 
+async function extractComplexCheckHints(projectFolderPath) {
+  try {
+    const checkPath = await findProjectCheckPath(projectFolderPath);
+    const html = await fsp.readFile(checkPath, 'utf8');
+    const m30131Rows = extractRowsFromCheckSection(html, 'M-30131');
+    const filesystemRows = [];
+    const tableRegex = /<table[^>]*>([\s\S]*?)<\/table>/gi;
+    let tableMatch;
+
+    while ((tableMatch = tableRegex.exec(html)) !== null) {
+      const tableHtml = tableMatch[0];
+      const tableText = decodeHtmlText(tableHtml);
+      if (!/filesystem problems/i.test(tableText)) {
+        continue;
+      }
+
+      const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+      let trMatch;
+      while ((trMatch = trRegex.exec(tableHtml)) !== null) {
+        const cells = [];
+        const cellRegex = /<(?:th|td)[^>]*>([\s\S]*?)<\/(?:th|td)>/gi;
+        let cellMatch;
+        while ((cellMatch = cellRegex.exec(trMatch[1])) !== null) {
+          const value = decodeHtmlText(cellMatch[1]);
+          if (value) {
+            cells.push(value);
+          }
+        }
+
+        if (cells.length > 0) {
+          filesystemRows.push(cells.join(' | '));
+        }
+      }
+    }
+
+    return {
+      checkPath,
+      m30131Rows,
+      filesystemRows
+    };
+  }
+  catch {
+    return null;
+  }
+}
+
 async function extractDempingContingencyItems(projectFolderPath) {
   const checkPath = await findProjectCheckPath(projectFolderPath);
   const html = await fsp.readFile(checkPath, 'utf8');
@@ -2262,9 +2308,12 @@ ipcMain.handle('mdb:update-fc', async (_event, payload) => {
 
     if (Array.isArray(result.warnings) && result.warnings.length > 0) {
       const warningLines = result.warnings.map((item) => {
+        const addressCode = item?.AddressCode ? ` [${item.AddressCode}]` : ''
+        if (item?.DeliveryStatus && Array.isArray(item?.Allowed)) {
+          return `- ${item?.CableId ?? 'sin cable'}${addressCode}: status ${item.DeliveryStatus} permite ${item.Allowed.join('/')} -> FTU_Locatie=XXXX`
+        }
         const fromValue = item?.From ?? 'vacio'
         const toValue = item?.To ?? 'vacio'
-        const addressCode = item?.AddressCode ? ` [${item.AddressCode}]` : ''
         return `- ${item?.CableId ?? 'sin cable'}${addressCode}: ${fromValue} -> ${toValue}`
       });
 
@@ -2615,6 +2664,42 @@ ipcMain.handle('mdb:rebuild-customer-complexes', async (_event, payload) => {
       message: `COMPLEX rehecho en MDB: ${result.updated} clientes actualizados, ${result.assigned} asignados, ${result.cleared} limpiados.\n`
     });
 
+    if (Array.isArray(result.unusedComplexFolders) && result.unusedComplexFolders.length > 0) {
+      sendGenerationEvent({
+        type: 'log',
+        level: 'warning',
+        message: `Carpetas de Gebouwen no utilizadas para COMPLEX:\n${result.unusedComplexFolders.slice(0, 80).map((name) => `- ${name}`).join('\n')}\n`
+      });
+    }
+
+    const complexCheckHints = await extractComplexCheckHints(payload.projectFolderPath);
+    if (complexCheckHints) {
+      if (complexCheckHints.m30131Rows.length > 0) {
+        const lines = complexCheckHints.m30131Rows.slice(0, 60).map((row) => {
+          const cable = getCheckValue(row, ['kabel', 'Cable', 'Kabel']);
+          const postcode = getCheckValue(row, ['postcode']);
+          const huisnr = getCheckValue(row, ['huisnr', 'Huisnr']);
+          const toevoeging = getCheckValue(row, ['toevoeging']);
+          const kamer = getCheckValue(row, ['kamer']);
+          const address = [postcode, huisnr, toevoeging, kamer].filter(Boolean).join('-');
+          return `- ${cable || 'sin cable'}${address ? ` [${address}]` : ''}`;
+        });
+        sendGenerationEvent({
+          type: 'log',
+          level: 'warning',
+          message: `Pistas Checks M-30131 sin COMPLEX/HR (${complexCheckHints.checkPath}):\n${lines.join('\n')}\n`
+        });
+      }
+
+      if (complexCheckHints.filesystemRows.length > 0) {
+        sendGenerationEvent({
+          type: 'log',
+          level: 'warning',
+          message: `Pistas Checks "Filesystem problems":\n${complexCheckHints.filesystemRows.slice(0, 80).map((line) => `- ${line}`).join('\n')}\n`
+        });
+      }
+    }
+
     sendGenerationEvent({
       type: 'status',
       message: 'COMPLEX rehecho correctamente.'
@@ -2625,7 +2710,8 @@ ipcMain.handle('mdb:rebuild-customer-complexes', async (_event, payload) => {
       updated: result.updated,
       assigned: result.assigned,
       cleared: result.cleared,
-      available: result.available
+      available: result.available,
+      unusedComplexFolders: result.unusedComplexFolders ?? []
     };
   }
   finally {

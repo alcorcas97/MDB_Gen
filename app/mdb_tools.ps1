@@ -121,6 +121,45 @@ function Resolve-StatusLocation {
     return $allowedLocations[0]
 }
 
+function Resolve-StatusFtuLocation {
+    param(
+        [string]$DeliveryStatus,
+        [object]$CableId,
+        [object]$AddressLabel
+    )
+
+    $allowedLocations = @(Get-AllowedStatusLocations -DeliveryStatus $DeliveryStatus)
+    if ($allowedLocations.Count -eq 0) {
+        return [pscustomobject]@{
+            Location    = $null
+            IsAmbiguous = $false
+            Allowed     = @()
+            Warning     = $null
+        }
+    }
+
+    if ($allowedLocations.Count -eq 1) {
+        return [pscustomobject]@{
+            Location    = $allowedLocations[0]
+            IsAmbiguous = $false
+            Allowed     = $allowedLocations
+            Warning     = $null
+        }
+    }
+
+    return [pscustomobject]@{
+        Location    = 'XXXX'
+        IsAmbiguous = $true
+        Allowed     = $allowedLocations
+        Warning     = [pscustomobject]@{
+            CableId        = Normalize-Text $CableId
+            AddressCode    = Normalize-Text $AddressLabel
+            DeliveryStatus = Normalize-Text $DeliveryStatus
+            Allowed        = @($allowedLocations)
+        }
+    }
+}
+
 function Get-AddressMatchKey {
     param(
         [object]$Postcode,
@@ -373,7 +412,19 @@ function Import-CustomerCoordinates {
     }
 
     $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
-    $items = @((ConvertFrom-Json -InputObject ($raw -replace '^\uFEFF', '')))
+    $sourceData = ConvertFrom-Json -InputObject ($raw -replace '^\uFEFF', '')
+    $items = if ($sourceData.PSObject.Properties.Name -contains 'Assignments') {
+        @($sourceData.Assignments)
+    }
+    else {
+        @($sourceData)
+    }
+    $complexDefinitions = if ($sourceData.PSObject.Properties.Name -contains 'ComplexDefinitions') {
+        @($sourceData.ComplexDefinitions)
+    }
+    else {
+        @()
+    }
     $coordinateLookup = @{}
 
     foreach ($item in $items) {
@@ -1012,15 +1063,18 @@ function Rebuild-CustomerComplexes {
     $updated = 0
     $assigned = 0
     $cleared = 0
+    $usedComplexLookup = @{}
 
     try {
         while (-not $recordset.EOF) {
             $cableId = Normalize-Text $recordset.Fields('Kabel').Value
             $currentComplex = Normalize-Text $recordset.Fields('COMPLEX').Value
             $nextComplex = if ($null -ne $cableId -and $complexLookup.ContainsKey($cableId)) { $complexLookup[$cableId] } else { $null }
+            $complexField = $recordset.Fields('COMPLEX')
+            $nextStoredComplex = if ($null -ne $nextComplex) { Limit-AccessTextValue -Field $complexField -Value $nextComplex } else { $null }
 
             $currentComparable = if ($null -eq $currentComplex) { '' } else { $currentComplex }
-            $nextComparable = if ($null -eq $nextComplex) { '' } else { $nextComplex }
+            $nextComparable = if ($null -eq $nextStoredComplex) { '' } else { $nextStoredComplex }
 
             if ($currentComparable -ne $nextComparable) {
                 $recordset.Edit()
@@ -1029,12 +1083,16 @@ function Rebuild-CustomerComplexes {
                     $cleared++
                 }
                 else {
-                    $recordset.Fields('COMPLEX').Value = $nextComplex
+                    $recordset.Fields('COMPLEX').Value = $nextStoredComplex
                     $assigned++
                 }
 
                 $recordset.Update()
                 $updated++
+            }
+
+            if ($null -ne $nextComplex) {
+                $usedComplexLookup[$nextComplex] = $true
             }
 
             $recordset.MoveNext()
@@ -1045,11 +1103,15 @@ function Rebuild-CustomerComplexes {
         [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($recordset)
     }
 
+    $allComplexFolders = @($complexDefinitions | ForEach-Object { Normalize-Text $_.Name } | Where-Object { $null -ne $_ } | Sort-Object -Unique)
+    $unusedComplexFolders = @($allComplexFolders | Where-Object { -not $usedComplexLookup.ContainsKey($_) })
+
     return [pscustomobject]@{
         updated   = $updated
         assigned  = $assigned
         cleared   = $cleared
-        available = $complexLookup.Count
+        available = if ($allComplexFolders.Count -gt 0) { $allComplexFolders.Count } else { $complexLookup.Count }
+        unusedComplexFolders = @($unusedComplexFolders)
     }
 }
 
@@ -1072,6 +1134,7 @@ function Apply-FcUpdates {
     foreach ($item in $items) {
         $cableId = Normalize-Text $item.CableId
         $deliveryStatus = Normalize-Text $item.DeliveryStatus
+        $ftuReviewWarning = Get-JsonPropertyValue -Object $item -Names @('FtuReviewWarning')
         $assignment = [pscustomobject]@{
             CableId        = $cableId
             Postcode       = Normalize-Text $item.Postcode
@@ -1081,6 +1144,10 @@ function Apply-FcUpdates {
             AddressMatchKey = Normalize-Text $item.AddressMatchKey
             DeliveryStatus = $deliveryStatus
             FtuLocation    = Normalize-UpperStatus $item.FtuLocation
+            SourceFtuLocation = Normalize-UpperStatus $item.SourceFtuLocation
+            FtuReviewRequired = [bool](Get-JsonPropertyValue -Object $item -Names @('FtuReviewRequired'))
+            FtuAllowedLocations = @(Get-JsonPropertyValue -Object $item -Names @('FtuAllowedLocations'))
+            FtuReviewWarning = $ftuReviewWarning
             StatusIs2      = ($deliveryStatus -eq '2')
             Measurement    = Convert-ToNullableDouble $item.Measurement
         }
@@ -1131,14 +1198,12 @@ function Apply-FcUpdates {
             }
 
             if ($null -ne $fcItem) {
-                $preferredFtuLocation = Normalize-UpperStatus $fcItem.FtuLocation
-                $targetFtuLocation = if ($null -ne $preferredFtuLocation) {
-                    $preferredFtuLocation
-                }
-                else {
-                    Resolve-StatusLocation -DeliveryStatus $fcItem.DeliveryStatus -CurrentLocation $customerRecordset.Fields('Kastnr').Value -PreferredLocation $fcItem.FtuLocation
-                }
+                $targetFtuLocation = Normalize-UpperStatus $fcItem.FtuLocation
                 $targetFtuType = if ($fcItem.StatusIs2) { 'FTU_TK01' } else { $null }
+
+                if ($fcItem.FtuReviewRequired -and $null -ne $fcItem.FtuReviewWarning) {
+                    $statusChangeWarnings.Add($fcItem.FtuReviewWarning)
+                }
 
                 $currentFtuLocation = Normalize-UpperStatus $customerRecordset.Fields('Kastnr').Value
                 $currentFtuType = Normalize-Text $customerRecordset.Fields('FTUType').Value
@@ -1226,13 +1291,7 @@ function Apply-FcUpdates {
             }
 
             if ($null -ne $fcItem) {
-                $preferredStatusLocation = Normalize-UpperStatus $fcItem.FtuLocation
-                $targetStatusLocation = if ($null -ne $preferredStatusLocation) {
-                    $preferredStatusLocation
-                }
-                else {
-                    Resolve-StatusLocation -DeliveryStatus $fcItem.DeliveryStatus -CurrentLocation $cableRecordset.Fields('Afwerkeenheid_B').Value -PreferredLocation $fcItem.FtuLocation
-                }
+                $targetStatusLocation = Normalize-UpperStatus $fcItem.FtuLocation
                 $targetTermination = if ($fcItem.StatusIs2) { $fcItem.FtuLocation } else { $null }
                 $targetCableType = Resolve-CustomerCableType -FtuLocation $targetStatusLocation
                 $currentTermination = Normalize-UpperStatus $cableRecordset.Fields('Afwerkeenheid_B').Value
@@ -1982,6 +2041,26 @@ function Set-DaoFieldValue {
     ) | Out-Null
 }
 
+function Limit-AccessTextValue {
+    param(
+        [__ComObject]$Field,
+        [object]$Value
+    )
+
+    $normalizedText = Normalize-Text $Value
+    if ($null -eq $normalizedText) {
+        return $null
+    }
+
+    $fieldType = [int]$Field.Type
+    $fieldSize = [int]$Field.Size
+    if ($fieldType -eq 10 -and $fieldSize -gt 0 -and $normalizedText.Length -gt $fieldSize) {
+        return $normalizedText.Substring(0, $fieldSize)
+    }
+
+    return $normalizedText
+}
+
 function Set-AccessFieldValue {
     param(
         [__ComObject]$Recordset,
@@ -2003,7 +2082,7 @@ function Set-AccessFieldValue {
             return
         }
 
-        $normalizedText = Normalize-Text $Value
+        $normalizedText = Limit-AccessTextValue -Field $field -Value $Value
         if ($null -eq $normalizedText) {
             return
         }
@@ -2342,6 +2421,12 @@ function Apply-FcRefresh {
     $statusChangeWarnings = [System.Collections.Generic.List[object]]::new()
     $customerFieldChanges = @{}
     $cableFieldChanges = @{}
+
+    foreach ($warning in @($sourceData.FtuReviewWarnings)) {
+        if ($null -ne $warning) {
+            $statusChangeWarnings.Add($warning)
+        }
+    }
 
     foreach ($sourceRow in $sourceCustomerRows) {
         $key = Get-ConnectionSyncKey -TableName 'Klant' -Row $sourceRow

@@ -766,10 +766,15 @@ async function updateFc() {
       appendLog('Cambios sensibles GL/EG/RESV detectados:', 'warning');
 
       for (const warning of result.warnings) {
-        const fromValue = warning?.From ?? 'vacio';
-        const toValue = warning?.To ?? 'vacio';
         const addressCode = warning?.AddressCode ? ` [${warning.AddressCode}]` : '';
-        appendLog(`- ${warning?.CableId ?? 'sin cable'}${addressCode}: ${fromValue} -> ${toValue}`, 'warning');
+        if (warning?.DeliveryStatus && Array.isArray(warning?.Allowed)) {
+          appendLog(`- ${warning?.CableId ?? 'sin cable'}${addressCode}: status ${warning.DeliveryStatus} permite ${warning.Allowed.join('/')} -> FTU_Locatie=XXXX`, 'warning');
+        }
+        else {
+          const fromValue = warning?.From ?? 'vacio';
+          const toValue = warning?.To ?? 'vacio';
+          appendLog(`- ${warning?.CableId ?? 'sin cable'}${addressCode}: ${fromValue} -> ${toValue}`, 'warning');
+        }
       }
     }
     else {
@@ -821,6 +826,9 @@ async function rebuildCustomerComplexes() {
 
     setStatus(`COMPLEX rehecho: ${result.updated} clientes actualizados.`, 'success');
     appendLog(`COMPLEX rehecho en ${result.mdbPath}. Actualizados: ${result.updated}. Asignados: ${result.assigned}. Limpiados: ${result.cleared}.`, 'success');
+    if (Array.isArray(result.unusedComplexFolders) && result.unusedComplexFolders.length > 0) {
+      appendLog(`Carpetas Gebouwen no utilizadas: ${result.unusedComplexFolders.join(' | ')}`, 'warning');
+    }
   }
   catch (error) {
     setStatus(error.message, 'error');
