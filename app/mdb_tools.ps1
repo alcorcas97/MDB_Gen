@@ -124,6 +124,7 @@ function Resolve-StatusLocation {
 function Resolve-StatusFtuLocation {
     param(
         [string]$DeliveryStatus,
+        [object]$PreferredLocation,
         [object]$CableId,
         [object]$AddressLabel
     )
@@ -141,6 +142,16 @@ function Resolve-StatusFtuLocation {
     if ($allowedLocations.Count -eq 1) {
         return [pscustomobject]@{
             Location    = $allowedLocations[0]
+            IsAmbiguous = $false
+            Allowed     = $allowedLocations
+            Warning     = $null
+        }
+    }
+
+    $preferredNormalized = Normalize-UpperStatus $PreferredLocation
+    if ($null -ne $preferredNormalized -and $preferredNormalized -in $allowedLocations) {
+        return [pscustomobject]@{
+            Location    = $preferredNormalized
             IsAmbiguous = $false
             Allowed     = $allowedLocations
             Warning     = $null
@@ -1047,7 +1058,19 @@ function Rebuild-CustomerComplexes {
     }
 
     $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
-    $items = @((ConvertFrom-Json -InputObject ($raw -replace '^\uFEFF', '')))
+    $sourceData = ConvertFrom-Json -InputObject ($raw -replace '^\uFEFF', '')
+    $items = if ($sourceData.PSObject.Properties.Name -contains 'Assignments') {
+        @($sourceData.Assignments)
+    }
+    else {
+        @($sourceData)
+    }
+    $complexDefinitions = if ($sourceData.PSObject.Properties.Name -contains 'ComplexDefinitions') {
+        @($sourceData.ComplexDefinitions)
+    }
+    else {
+        @()
+    }
     $complexLookup = @{}
 
     foreach ($item in $items) {

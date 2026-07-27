@@ -84,6 +84,7 @@ function Get-AllowedStatusLocations {
 function Resolve-StatusFtuLocation {
     param(
         [string]$DeliveryStatus,
+        [object]$PreferredLocation,
         [object]$CableId,
         [object]$AddressLabel
     )
@@ -101,6 +102,16 @@ function Resolve-StatusFtuLocation {
     if ($allowedLocations.Count -eq 1) {
         return [pscustomobject]@{
             Location    = $allowedLocations[0]
+            IsAmbiguous = $false
+            Allowed     = $allowedLocations
+            Warning     = $null
+        }
+    }
+
+    $preferredNormalized = Normalize-UpperStatus $PreferredLocation
+    if ($null -ne $preferredNormalized -and $preferredNormalized -in $allowedLocations) {
+        return [pscustomobject]@{
+            Location    = $preferredNormalized
             IsAmbiguous = $false
             Allowed     = $allowedLocations
             Warning     = $null
@@ -1748,7 +1759,7 @@ function Build-ProjectModel {
             $effectiveDeliveryStatus = Normalize-Text $fcRow.DeliveryStatus
         }
         $addressLabel = Get-AddressLabel -Postcode $bcRow.Postcode -HouseNumber $bcRow.HouseNumber -HouseSuffix $bcRow.HouseSuffix
-        $ftuResolution = Resolve-StatusFtuLocation -DeliveryStatus $effectiveDeliveryStatus -CableId $bcRow.CableId -AddressLabel $addressLabel
+        $ftuResolution = Resolve-StatusFtuLocation -DeliveryStatus $effectiveDeliveryStatus -PreferredLocation $fcRow.FtuLocation -CableId $bcRow.CableId -AddressLabel $addressLabel
         if ($ftuResolution.IsAmbiguous -and $null -ne $ftuResolution.Warning) {
             $ftuReviewWarnings.Add($ftuResolution.Warning)
         }
@@ -2287,7 +2298,7 @@ function Build-FcUpdateAssignments {
         }
 
         $addressLabel = Get-AddressLabel -Postcode $fcRow.Postcode -HouseNumber $fcRow.HouseNumber -HouseSuffix $fcRow.HouseSuffix
-        $ftuResolution = Resolve-StatusFtuLocation -DeliveryStatus $effectiveDeliveryStatus -CableId $fcRow.CableId -AddressLabel $addressLabel
+        $ftuResolution = Resolve-StatusFtuLocation -DeliveryStatus $effectiveDeliveryStatus -PreferredLocation $fcRow.FtuLocation -CableId $fcRow.CableId -AddressLabel $addressLabel
 
         $rows += [pscustomobject]@{
             CableId          = $fcRow.CableId
