@@ -1186,7 +1186,10 @@ async function extractComplexCheckHints(projectFolderPath) {
         }
 
         if (cells.length > 0) {
-          filesystemRows.push(cells.join(' | '));
+          const rowText = cells.join(' | ');
+          if (rowText !== 'Message' && !/\.(bak|adt)\b/i.test(rowText)) {
+            filesystemRows.push(rowText);
+          }
         }
       }
     }
@@ -2822,6 +2825,18 @@ ipcMain.handle('mdb:rebuild-customer-complexes', async (_event, payload) => {
       complexAssignmentsPayload = null;
     }
 
+    const assignments = Array.isArray(complexAssignmentsPayload?.Assignments) ? complexAssignmentsPayload.Assignments : [];
+    const unassignedConnections = Array.isArray(complexAssignmentsPayload?.ManualReview?.UnassignedConnections)
+      ? complexAssignmentsPayload.ManualReview.UnassignedConnections
+      : [];
+    const assignedCount = assignments.filter((item) => item?.Complex).length;
+
+    sendGenerationEvent({
+      type: 'log',
+      level: unassignedConnections.length > 0 ? 'warning' : 'info',
+      message: `Analisis COMPLEX preparado: ${assignedCount} conexiones con carpeta HR resuelta, ${unassignedConnections.length} conexiones quedan como REVISION MANUAL porque no hay carpeta HR procesable que cubra su direccion.\n`
+    });
+
     const result = await runMdbToolsJson([
       '-Mode',
       'RebuildCustomerComplexes',
@@ -2861,11 +2876,10 @@ ipcMain.handle('mdb:rebuild-customer-complexes', async (_event, payload) => {
       }
     }
 
-    const unassignedConnections = complexAssignmentsPayload?.ManualReview?.UnassignedConnections;
     if (Array.isArray(unassignedConnections) && unassignedConnections.length > 0) {
       const lines = unassignedConnections.slice(0, 120).map((item) => {
         const address = [item?.Street, item?.HouseNumber, item?.HouseSuffix, item?.Room].filter(Boolean).join(' ');
-        return `- ${item?.CableId ?? 'sin cable'}: ${address || 'sin direccion'}`
+        return `- ${item?.CableId ?? 'sin cable'}: ${address || 'sin direccion'} -> REVISION MANUAL (sin carpeta HR procesable)`
       });
 
       sendGenerationEvent({
@@ -2890,17 +2904,17 @@ ipcMain.handle('mdb:rebuild-customer-complexes', async (_event, payload) => {
         sendGenerationEvent({
           type: 'log',
           level: 'warning',
-          message: `Pistas Checks M-30131 sin COMPLEX/HR (${complexCheckHints.checkPath}):\n${lines.join('\n')}\n`
+          message: `Checks.htm existente leido como diagnostico M-30131 (puede estar obsoleto hasta volver a pasar el check):\n${lines.join('\n')}\n`
         });
       }
 
       if (complexCheckHints.filesystemRows.length > 0) {
-        const relevantFilesystemRows = complexCheckHints.filesystemRows.filter((line) => !/\.(bak|adt)\b/i.test(line));
+        const relevantFilesystemRows = complexCheckHints.filesystemRows.filter((line) => line !== 'Message' && !/\.(bak|adt)\b/i.test(line));
         if (relevantFilesystemRows.length > 0) {
           sendGenerationEvent({
             type: 'log',
             level: 'warning',
-            message: `Pistas Checks "Filesystem problems":\n${relevantFilesystemRows.slice(0, 80).map((line) => `- ${line}`).join('\n')}\n`
+            message: `Checks.htm existente leido como diagnostico "Filesystem problems" (no se usa para inventar COMPLEX; revisar tras volver a chequear):\n${relevantFilesystemRows.slice(0, 80).map((line) => `- ${line}`).join('\n')}\n`
           });
         }
       }
@@ -2908,7 +2922,9 @@ ipcMain.handle('mdb:rebuild-customer-complexes', async (_event, payload) => {
 
     sendGenerationEvent({
       type: 'status',
-      message: 'COMPLEX rehecho correctamente.'
+      message: unassignedConnections.length > 0
+        ? `COMPLEX aplicado. Quedan ${unassignedConnections.length} conexiones en revision manual.`
+        : 'COMPLEX rehecho correctamente.'
     });
 
     return {
@@ -2917,7 +2933,9 @@ ipcMain.handle('mdb:rebuild-customer-complexes', async (_event, payload) => {
       assigned: result.assigned,
       cleared: result.cleared,
       available: result.available,
-      unusedComplexFolders: result.unusedComplexFolders ?? []
+      unusedComplexFolders: result.unusedComplexFolders ?? [],
+      assignedConnections: assignedCount,
+      manualReviewConnections: unassignedConnections.length
     };
   }
   finally {

@@ -824,8 +824,10 @@ async function rebuildCustomerComplexes() {
       projectFolderPath: elements.projectFolderPath.value.trim()
     });
 
-    setStatus(`COMPLEX rehecho: ${result.updated} clientes actualizados.`, 'success');
-    appendLog(`COMPLEX rehecho en ${result.mdbPath}. Actualizados: ${result.updated}. Asignados: ${result.assigned}. Limpiados: ${result.cleared}.`, 'success');
+    const manualReview = Number(result.manualReviewConnections ?? 0);
+    const manualSuffix = manualReview > 0 ? ` ${manualReview} conexiones quedan en revision manual.` : '';
+    setStatus(`COMPLEX rehecho: ${result.updated} clientes actualizados.${manualSuffix}`, manualReview > 0 ? 'warning' : 'success');
+    appendLog(`COMPLEX rehecho en ${result.mdbPath}. Actualizados: ${result.updated}. Asignados: ${result.assigned}. Limpiados: ${result.cleared}. Con carpeta HR resuelta: ${result.assignedConnections ?? 'n/d'}. Revision manual: ${result.manualReviewConnections ?? 0}.`, manualReview > 0 ? 'warning' : 'success');
     if (Array.isArray(result.unusedComplexFolders) && result.unusedComplexFolders.length > 0) {
       appendLog(`Carpetas Gebouwen no utilizadas: ${result.unusedComplexFolders.join(' | ')}`, 'warning');
     }
