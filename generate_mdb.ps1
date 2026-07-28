@@ -220,16 +220,22 @@ function Normalize-StreetKey {
     $normalized = $normalized -replace 'CK', 'K'
     $normalized = $normalized -replace 'SSTRAAT\b', 'STRAAT'
     $normalized = $normalized -replace '\bA\.?\s*CUYPSTRAAT\b', 'ALBERT CUYPSTRAAT'
+    $normalized = $normalized -replace '\bA\.?\s*CUYPSTR\b', 'ALBERT CUYPSTRAAT'
     $normalized = $normalized -replace '\bE\.?\s*J\.?\s*STEENSTRAAT\b', 'EERSTE JAN STEENSTRAAT'
     $normalized = $normalized -replace '\bE\.?\s*V\.?\s*D\.?\s*HELSTSTRAAT\b', 'EERSTE VAN DER HELSTSTRAAT'
+    $normalized = $normalized -replace '\bE\.?\s*V\.?\s*HELSTSTR\b', 'EERSTE VAN DER HELSTSTRAAT'
     $normalized = $normalized -replace '\bF\.?\s*BOLSTRAAT\b', 'FERDINAND BOLSTRAAT'
+    $normalized = $normalized -replace '\bF\.?\s*BOLSTR\b', 'FERDINAND BOLSTRAAT'
     $normalized = $normalized -replace '\bG\.?\s*FLINCKSTRAAT\b', 'GOVERT FLINKSTRAAT'
+    $normalized = $normalized -replace '\bG\.?\s*FLINCKSTR\b', 'GOVERT FLINKSTRAAT'
     $normalized = $normalized -replace '\bG\.?\s*FLINKSTRAAT\b', 'GOVERT FLINKSTRAAT'
+    $normalized = $normalized -replace '\bG\.?\s*FLINKSTR\b', 'GOVERT FLINKSTRAAT'
     $normalized = $normalized -replace '\bG\.?\s*DOUSTRAAT\b', 'GERARD DOUSTRAAT'
     $normalized = $normalized -replace '\bG\.?\s*DOUPLEIN\b', 'GERARD DOUPLEIN'
     $normalized = $normalized -replace '\bFERDINANDBOLSTRAAT\b', 'FERDINAND BOLSTRAAT'
     $normalized = $normalized -replace '\bALBERT CUPSTRAAT\b', 'ALBERT CUYPSTRAAT'
     $normalized = $normalized -replace '\bA\.?\s*CUPSTRAAT\b', 'ALBERT CUYPSTRAAT'
+    $normalized = $normalized -replace '\bA\.?\s*CUPSTR\b', 'ALBERT CUYPSTRAAT'
 
     return $normalized
 }

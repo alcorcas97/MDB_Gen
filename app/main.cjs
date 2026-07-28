@@ -1230,6 +1230,20 @@ function compactAbbreviatedComplexName(name) {
   return String(name ?? '')
     .replace(/\s+en\s+/gi, '+')
     .replace(/\b([A-Za-z])\.\s+/g, '$1.')
+    .replace(/,\s+/g, ',')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function compactKnownComplexStreetNames(name) {
+  return String(name ?? '')
+    .replace(/\bE\.v\.d\.Helststraat\b/gi, 'E.v.Helststr')
+    .replace(/\bE\.v\.Helststraat\b/gi, 'E.v.Helststr')
+    .replace(/\bA\.Cuypstraat\b/gi, 'A.Cuypstr')
+    .replace(/\bA\.Cupstraat\b/gi, 'A.Cupstr')
+    .replace(/\bG\.Flinckstraat\b/gi, 'G.Flinckstr')
+    .replace(/\bGovert Flinckstraat\b/gi, 'G.Flinckstr')
+    .replace(/\bFerdinand Bolstraat\b/gi, 'F.Bolstr')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -1270,7 +1284,7 @@ async function normalizeLongComplexNames(projectFolderPath) {
   const renames = [];
   const documentExtensions = new Set(['.pdf', '.doc', '.docx']);
   const maxImporterPathLength = 178;
-  const maxComfortableFolderNameLength = 58;
+  const maxComfortableFolderNameLength = 50;
 
   for (const entry of entries) {
     if (!entry.isDirectory()) {
@@ -1283,8 +1297,14 @@ async function normalizeLongComplexNames(projectFolderPath) {
     const hasTooLongDocumentPath = documentFiles.some((file) => path.join(oldFolderPath, file.name).length > maxImporterPathLength);
     let abbreviatedName = abbreviateComplexStreetName(entry.name);
     const firstExtension = documentFiles.length > 0 ? path.extname(documentFiles[0].name) : '.pdf';
-    if (path.join(gebouwenFolder, abbreviatedName, `${abbreviatedName}${firstExtension}`).length > maxImporterPathLength) {
+    if (
+      abbreviatedName.length > maxComfortableFolderNameLength ||
+      path.join(gebouwenFolder, abbreviatedName, `${abbreviatedName}${firstExtension}`).length > maxImporterPathLength
+    ) {
       abbreviatedName = compactAbbreviatedComplexName(abbreviatedName);
+    }
+    if (abbreviatedName.length > maxComfortableFolderNameLength) {
+      abbreviatedName = compactKnownComplexStreetNames(abbreviatedName);
     }
 
     if (
@@ -1332,6 +1352,58 @@ async function normalizeLongComplexNames(projectFolderPath) {
   }
 
   return renames;
+}
+
+function resolveComplexRenameLogFolder({ projectFolderPath, fcPath, bcPath }) {
+  const fcFolder = fcPath ? path.dirname(fcPath) : null;
+  const bcFolder = bcPath ? path.dirname(bcPath) : null;
+
+  if (fcFolder && bcFolder && fcFolder.toLowerCase() === bcFolder.toLowerCase()) {
+    return fcFolder;
+  }
+
+  if (fcFolder) {
+    return fcFolder;
+  }
+
+  if (bcFolder) {
+    return bcFolder;
+  }
+
+  return path.dirname(projectFolderPath);
+}
+
+async function writeComplexRenameLog({ projectFolderPath, fcPath, bcPath, renames }) {
+  if (!Array.isArray(renames) || renames.length === 0) {
+    return null;
+  }
+
+  const logFolder = resolveComplexRenameLogFolder({ projectFolderPath, fcPath, bcPath });
+  const logPath = path.join(logFolder, 'COMPLEX_HR_conversiones.txt');
+  const timestamp = new Date().toISOString();
+  const lines = [
+    '',
+    '============================================================',
+    `Fecha=${timestamp}`,
+    `Proyecto=${projectFolderPath}`,
+    `FC=${fcPath ?? ''}`,
+    `BC=${bcPath ?? ''}`
+  ];
+
+  for (const rename of renames) {
+    lines.push('---');
+    lines.push(`Original=${rename.from}`);
+    lines.push(`Acortado=${rename.to}`);
+    if (Array.isArray(rename.files) && rename.files.length > 0) {
+      for (const file of rename.files) {
+        lines.push(`Archivo=${file}`);
+      }
+    }
+  }
+
+  lines.push('');
+  await fsp.appendFile(logPath, `${lines.join('\n')}`, 'utf8');
+  return logPath;
 }
 
 async function extractDempingContingencyItems(projectFolderPath) {
@@ -2795,13 +2867,19 @@ ipcMain.handle('mdb:rebuild-customer-complexes', async (_event, payload) => {
   try {
     const complexRenames = await normalizeLongComplexNames(payload.projectFolderPath);
     if (complexRenames.length > 0) {
+      const complexRenameLogPath = await writeComplexRenameLog({
+        projectFolderPath: payload.projectFolderPath,
+        fcPath: payload.fcPath,
+        bcPath: payload.bcPath,
+        renames: complexRenames
+      });
       sendGenerationEvent({
         type: 'log',
         level: 'warning',
         message: `Nombres HR acortados para evitar limites de ruta/importador:\n${complexRenames.map((item) => {
           const fileInfo = item.files.length > 0 ? ` (${item.files.join(', ')})` : '';
           return `- ${item.from} -> ${item.to}${fileInfo}`;
-        }).join('\n')}\n`
+        }).join('\n')}\nRegistro guardado en ${complexRenameLogPath}\n`
       });
     }
 
@@ -3626,13 +3704,19 @@ ipcMain.handle('generation:run', async (_event, payload) => {
 
   const complexRenames = await normalizeLongComplexNames(payload.projectFolderPath);
   if (complexRenames.length > 0) {
+    const complexRenameLogPath = await writeComplexRenameLog({
+      projectFolderPath: payload.projectFolderPath,
+      fcPath: payload.fcPath,
+      bcPath: payload.bcPath,
+      renames: complexRenames
+    });
     sendGenerationEvent({
       type: 'log',
       level: 'warning',
       message: `Nombres HR acortados para evitar limites de ruta/importador:\n${complexRenames.map((item) => {
         const fileInfo = item.files.length > 0 ? ` (${item.files.join(', ')})` : '';
         return `- ${item.from} -> ${item.to}${fileInfo}`;
-      }).join('\n')}\n`
+      }).join('\n')}\nRegistro guardado en ${complexRenameLogPath}\n`
     });
   }
 
