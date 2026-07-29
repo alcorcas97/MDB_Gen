@@ -1448,12 +1448,41 @@ async function extractDempingContingencyItems(projectFolderPath) {
     dempingswaarde2z: 'Dempingswaarde2Z'
   };
   const items = [];
+  const nonTerminatedKeys = new Set();
+
+  const getDempingItemKey = ({ klantId, kabel }) => {
+    if (klantId) {
+      return `id:${String(klantId).trim().toLowerCase()}`;
+    }
+
+    if (kabel) {
+      return `kabel:${String(kabel).trim().toLowerCase()}`;
+    }
+
+    return null;
+  };
+
+  for (const row of extractRowsFromCheckSection(html, 'M-30090')) {
+    const klantId = getCheckValue(row, ['klant_id', 'klantid', 'klant id']);
+    const kabel = getCheckValue(row, ['kabel']);
+    const key = getDempingItemKey({ klantId, kabel });
+
+    if (key) {
+      nonTerminatedKeys.add(key);
+    }
+  }
 
   for (const row of extractRowsFromCheckSection(html, 'M-30212')) {
     const klantId = getCheckValue(row, ['klant_id', 'klantid', 'klant id']);
     const kabel = getCheckValue(row, ['kabel']);
 
     if (!klantId && !kabel) {
+      continue;
+    }
+
+    // If M-30090 is present for the same customer, the correct fix is to clear
+    // client-side FTU/demping fields, not to force a 2.2 attenuation value.
+    if (nonTerminatedKeys.has(getDempingItemKey({ klantId, kabel }))) {
       continue;
     }
 
@@ -1471,6 +1500,10 @@ async function extractDempingContingencyItems(projectFolderPath) {
     const fields = {};
     const klantId = getCheckValue(row, ['klant_id', 'klantid', 'klant id']);
     const kabel = getCheckValue(row, ['kabel']);
+
+    if (nonTerminatedKeys.has(getDempingItemKey({ klantId, kabel }))) {
+      continue;
+    }
 
     for (const [field, accessField] of Object.entries(dempingFieldMap)) {
       const rawValue = String(getCheckValue(row, [field]) ?? '').trim();
@@ -1498,6 +1531,21 @@ async function extractDempingContingencyItems(projectFolderPath) {
     const clearFields = [];
     const klantId = getCheckValue(row, ['klant_id', 'klantid', 'klant id']);
     const kabel = getCheckValue(row, ['kabel']);
+    const vezelnr1 = String(getCheckValue(row, ['vezelnr1', 'vezel nr1', 'vezelnummer1']) ?? '').trim();
+    const vezelnr2 = String(getCheckValue(row, ['vezelnr2', 'vezel nr2', 'vezelnummer2']) ?? '').trim();
+    const ftuType = String(getCheckValue(row, ['ftutype', 'ftu type', 'FTUType']) ?? '').trim();
+
+    if (vezelnr1) {
+      clearFields.push('VEZELNR1');
+    }
+
+    if (vezelnr2) {
+      clearFields.push('Vezelnr2');
+    }
+
+    if (ftuType) {
+      clearFields.push('FTUType');
+    }
 
     for (const [field, accessField] of Object.entries(dempingFieldMap)) {
       const rawValue = String(getCheckValue(row, [field]) ?? '').trim();

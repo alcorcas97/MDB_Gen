@@ -963,6 +963,9 @@ function Apply-DempingContingency {
     $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
     $items = @((ConvertFrom-Json -InputObject ($raw -replace '^\uFEFF', '')))
     $allowedFields = @(
+        'VEZELNR1',
+        'Vezelnr2',
+        'FTUType',
         'Dempingswaarde1A',
         'Dempingswaarde1Z',
         'Dempingswaarde2A',
@@ -992,7 +995,7 @@ function Apply-DempingContingency {
             continue
         }
 
-        $sql = "SELECT [ID], [Kabel], [Dempingswaarde1A], [Dempingswaarde1Z], [Dempingswaarde2A], [Dempingswaarde2Z] FROM [Klant] WHERE " + ($whereParts -join ' OR ')
+        $sql = "SELECT [ID], [Kabel], [VEZELNR1], [Vezelnr2], [FTUType], [Dempingswaarde1A], [Dempingswaarde1Z], [Dempingswaarde2A], [Dempingswaarde2Z] FROM [Klant] WHERE " + ($whereParts -join ' OR ')
         $recordset = $Database.OpenRecordset($sql)
 
         try {
@@ -1038,12 +1041,7 @@ function Apply-DempingContingency {
                     continue
                 }
 
-                if ($field.AllowZeroLength) {
-                    $field.Value = ''
-                }
-                else {
-                    $field.Value = [System.DBNull]::Value
-                }
+                $field.Value = [System.DBNull]::Value
                 $updatedFields++
                 $rowChanged = $true
             }
