@@ -967,6 +967,38 @@ function validateGenerationInput(payload) {
   if (missingFields.length > 0) {
     throw new Error(`Faltan rutas obligatorias: ${missingFields.join(', ')}.`);
   }
+
+  validateProjectSourceConsistencyInput(payload, { requireBc: true });
+}
+
+function normalizePathForComparison(filePath) {
+  return String(filePath ?? '')
+    .trim()
+    .replace(/[\\/]+/g, '\\')
+    .replace(/[\\]+$/, '')
+    .toLowerCase();
+}
+
+function validateProjectSourceConsistencyInput(payload, { requireBc = false } = {}) {
+  const projectFolderPath = String(payload?.projectFolderPath ?? '').trim();
+  const fcPath = String(payload?.fcPath ?? '').trim();
+  const bcPath = String(payload?.bcPath ?? '').trim();
+  const projectBaseFolder = normalizePathForComparison(projectFolderPath ? path.dirname(projectFolderPath) : '');
+  const fcBaseFolder = normalizePathForComparison(fcPath ? path.dirname(fcPath) : '');
+  const bcBaseFolder = normalizePathForComparison(bcPath ? path.dirname(bcPath) : '');
+  const issues = [];
+
+  if (projectBaseFolder && fcBaseFolder && projectBaseFolder !== fcBaseFolder) {
+    issues.push(`El FC seleccionado parece pertenecer a otra carpeta base. Proyecto: ${path.dirname(projectFolderPath)} | FC: ${path.dirname(fcPath)}`);
+  }
+
+  if (requireBc && projectBaseFolder && bcBaseFolder && projectBaseFolder !== bcBaseFolder) {
+    issues.push(`El BC seleccionado parece pertenecer a otra carpeta base. Proyecto: ${path.dirname(projectFolderPath)} | BC: ${path.dirname(bcPath)}`);
+  }
+
+  if (issues.length > 0) {
+    throw new Error(issues.join(' '));
+  }
 }
 
 function validateProjectAndMdbInput(payload) {
@@ -1544,6 +1576,8 @@ function validateCrossCheckInput(payload) {
   if (missingFields.length > 0) {
     throw new Error(`Faltan rutas obligatorias: ${missingFields.join(', ')}.`);
   }
+
+  validateProjectSourceConsistencyInput(payload, { requireBc: true });
 }
 
 async function resolveProjectWorkingMdbPath(projectFolderPath) {
@@ -2472,6 +2506,8 @@ ipcMain.handle('mdb:update-fc', async (_event, payload) => {
   if (missingFields.length > 0) {
     throw new Error(`Faltan rutas obligatorias: ${missingFields.join(', ')}.`);
   }
+
+  validateProjectSourceConsistencyInput(payload, { requireBc: true });
 
   const workingMdbPath = await resolveProjectWorkingMdbPath(payload.projectFolderPath);
   const assignmentsPath = path.join(

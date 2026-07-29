@@ -401,6 +401,7 @@ function validateFcProjectInputs() {
 
   for (const [input, label] of [
     [elements.fcPath, 'FC Excel'],
+    [elements.bcPath, 'BC CSV'],
     [elements.projectFolderPath, 'Carpeta del proyecto']
   ]) {
     if (!input.value.trim()) {
@@ -729,7 +730,7 @@ async function updateFc() {
     return;
   }
 
-  const consistencyIssues = validateProjectSourceConsistency();
+  const consistencyIssues = validateProjectSourceConsistency({ requireBc: true });
   if (consistencyIssues.length > 0) {
     const message = consistencyIssues.join(' ');
     setStatus(message, 'warning');
