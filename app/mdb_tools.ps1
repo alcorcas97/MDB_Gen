@@ -1218,6 +1218,7 @@ function Apply-FcUpdates {
     $updatedCableFields = 0
     $statusChangeWarnings = [System.Collections.Generic.List[object]]::new()
     $pendingCustomerUpdates = [System.Collections.Generic.List[object]]::new()
+    $ductCableLookup = Get-DuctCableLookup -Database $Database
 
     $customerRecordset = $Database.OpenRecordset('SELECT [ID], [Kabel], [Kastnr], [FTUType], [Postcode], [Huisnr], [Toevoeging], [KAMER] FROM [Klant]')
     try {
@@ -1356,7 +1357,8 @@ function Apply-FcUpdates {
 
                 $currentCableTypeComparable = if ($null -eq $currentCableType) { '' } else { $currentCableType }
                 $targetCableTypeComparable = if ($null -eq $targetCableType) { '' } else { $targetCableType }
-                if ($currentCableTypeComparable -ne $targetCableTypeComparable) {
+                $isDuctCable = $null -ne $label -and $ductCableLookup.ContainsKey($label.ToUpperInvariant())
+                if (-not $isDuctCable -and $currentCableTypeComparable -ne $targetCableTypeComparable) {
                     if (-not $rowChanged) {
                         $cableRecordset.Edit()
                         $rowChanged = $true
@@ -2327,6 +2329,21 @@ function Get-FcRefreshPreservedFieldNames {
     }
 }
 
+function Get-DuctCableLookup {
+    param([__ComObject]$Database)
+
+    $lookup = @{}
+    $ductRows = @(Get-TableRows -Database $Database -TableName 'Duct')
+    foreach ($row in $ductRows) {
+        $cableId = Normalize-Text $row.Kabel
+        if ($null -ne $cableId) {
+            $lookup[$cableId.ToUpperInvariant()] = $true
+        }
+    }
+
+    return $lookup
+}
+
 function Merge-FcRefreshRow {
     param(
         [string]$TableName,
@@ -2439,6 +2456,7 @@ function Apply-FcRefresh {
     $sourceCableRows = @(Reset-ConnectionSyncIds -Rows @($sourceData.TableRows.Kabel))
     $existingCustomerRows = @(Get-TableRows -Database $Database -TableName 'Klant')
     $existingCableRows = @(Get-TableRows -Database $Database -TableName 'Kabel')
+    $ductCableLookup = Get-DuctCableLookup -Database $Database
 
     $existingCustomersByKey = @{}
     foreach ($row in $existingCustomerRows) {
@@ -2522,6 +2540,10 @@ function Apply-FcRefresh {
         $key = Get-ConnectionSyncKey -TableName 'Kabel' -Row $sourceRow
         $existingRow = if ($null -ne $key -and $existingCablesByKey.ContainsKey($key)) { $existingCablesByKey[$key] } else { $null }
         $mergedRow = Merge-FcRefreshRow -TableName 'Kabel' -SourceRow $sourceRow -ExistingRow $existingRow
+        $label = Normalize-Text $mergedRow.Label
+        if ($null -ne $existingRow -and $null -ne $label -and $ductCableLookup.ContainsKey($label.ToUpperInvariant())) {
+            $mergedRow.Kabeltype = $existingRow.Kabeltype
+        }
         $targetCableRows += $mergedRow
 
         $diff = Compare-RowChangeCount -ExistingRow $existingRow -TargetRow $mergedRow
