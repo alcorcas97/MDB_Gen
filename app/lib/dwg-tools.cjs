@@ -766,6 +766,29 @@ ${buildProgressHelpersLisp(progressFilePath)}
   point
 )
 
+(defun fmdb-reset-output-file (/ handle)
+  (setq handle (open fmdb-output-file "w"))
+  (if handle
+    (progn
+      (close handle)
+      T
+    )
+    nil
+  )
+)
+
+(defun fmdb-write-output-line (text / handle)
+  (setq handle (open fmdb-output-file "a"))
+  (if handle
+    (progn
+      (write-line text handle)
+      (close handle)
+      T
+    )
+    nil
+  )
+)
+
 (defun fmdb-boring-reference-p (text)
   (and text
        (or
@@ -776,13 +799,12 @@ ${buildProgressHelpersLisp(progressFilePath)}
   )
 )
 
-(defun c:FIBER_EXPORT_BORING_REFERENCES (/ document modelspace handle object objectName text point x y z output total)
+(defun c:FIBER_EXPORT_BORING_REFERENCES (/ document modelspace handle object objectName text point x y z total)
   (setq document (vla-get-ActiveDocument (vlax-get-acad-object)))
   (setq modelspace (vla-get-ModelSpace document))
-  (setq output (open fmdb-output-file "w"))
   (setq total 0)
   (fmdb-report-stage "scan")
-  (if output
+  (if (fmdb-reset-output-file)
     (progn
       (vlax-for object modelspace
         (setq objectName (vla-get-ObjectName object))
@@ -796,9 +818,8 @@ ${buildProgressHelpersLisp(progressFilePath)}
                 (setq x (if (car point) (car point) 0.0))
                 (setq y (if (cadr point) (cadr point) 0.0))
                 (setq z (if (caddr point) (caddr point) 0.0))
-                (write-line
+                (fmdb-write-output-line
                   (strcat handle (chr 9) text (chr 9) (fmdb-format-real x) (chr 9) (fmdb-format-real y) (chr 9) (fmdb-format-real z) (chr 9) objectName)
-                  output
                 )
                 (setq total (1+ total))
               )
@@ -806,8 +827,8 @@ ${buildProgressHelpersLisp(progressFilePath)}
           )
         )
       )
-      (close output)
     )
+    (fmdb-report-result "ERROR" "No se ha podido abrir el fichero de salida de boringen")
   )
   (fmdb-report-result "FOUND" (itoa total))
   (fmdb-report-done "EXPORT_BORING_REFERENCES")
@@ -1332,7 +1353,7 @@ async function extractBoringReferencesFromDwg(projectFolderPath, options = {}) {
   const scriptToken = `${projectToken}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const lispFilePath = path.join(os.tmpdir(), `fiber-export-borings-${scriptToken}.lsp`);
   const progressFilePath = path.join(os.tmpdir(), `fiber-export-borings-${scriptToken}.progress`);
-  const outputFilePath = path.join(os.tmpdir(), `fiber-export-borings-${scriptToken}.txt`);
+  const outputFilePath = path.join(projectFolderPath, `.fiber-export-borings-${scriptToken}.txt`);
   const scriptFilePath = path.join(os.tmpdir(), `fiber-export-borings-${scriptToken}.scr`);
   const timeoutMs = 90000;
   let usedOpenDocument = false;
@@ -1382,7 +1403,9 @@ async function extractBoringReferencesFromDwg(projectFolderPath, options = {}) {
     }
 
     if (!(await pathExists(outputFilePath))) {
-      throw new Error('AutoCAD no ha generado el fichero temporal de referencias de Boringen.');
+      const progressText = await fsp.readFile(progressFilePath, 'utf8').catch(() => '');
+      const suffix = progressText ? ` Ultimo progreso de AutoCAD: ${progressText.replace(/\s+/g, ' ').trim()}` : '';
+      throw new Error(`AutoCAD no ha generado el fichero temporal de referencias de Boringen.${suffix}`);
     }
 
     const references = parseBoringReferenceExport(await fsp.readFile(outputFilePath, 'utf8'));
