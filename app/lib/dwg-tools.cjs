@@ -14,6 +14,8 @@ const EXPORT_COMMAND_NAME = 'FIBER_EXPORT_CUSTOMER_COORDS';
 const CLEAN_COMMAND_NAME = 'FIBER_CLEAR_CUSTOMER_COORDS';
 const REMOVE_EXTRA_ROLES_COMMAND_NAME = 'FIBER_REMOVE_EXTRA_ROLES';
 const DRAW_ACCESSNET_WITHOUT_ADDRESS_COMMAND_NAME = 'FIBER_DRAW_ACCESSNET_WITHOUT_ADDRESS';
+const EXPORT_BORING_REFERENCES_COMMAND_NAME = 'FIBER_EXPORT_BORING_REFERENCES';
+const APPLY_BORING_RENAMES_COMMAND_NAME = 'FIBER_APPLY_BORING_RENAMES';
 const EXTRA_ROLE_BLOCK_NAME = 'ROL';
 const EXTRA_ROLE_CHECK_CODE = 'M-30173';
 const EXTRA_ROLE_TOLERANCE = 1;
@@ -346,6 +348,16 @@ function toAutoLispPath(filePath) {
 
 function toLispStringList(values) {
   return `(${values.map((value) => `"${escapeLispString(value)}"`).join(' ')})`;
+}
+
+function toBoringRenameLispData(items) {
+  const lines = items.map((item) => {
+    const handle = escapeLispString(item.handle);
+    const newText = escapeLispString(item.newText);
+    return `  ("${handle}" "${newText}")`;
+  });
+
+  return `(\n${lines.join('\n')}\n)\n`;
 }
 
 function sanitizeProcessOutput(value) {
@@ -695,6 +707,155 @@ ${buildProgressHelpersLisp(progressFilePath)}
   )
   (fmdb-report-result "EXPORTED" (itoa exportedCount))
   (fmdb-report-done "EXPORT")
+  (princ)
+)
+`;
+}
+
+function buildExportBoringReferencesLisp({ outputFilePath, progressFilePath }) {
+  return `(setq fmdb-output-file "${escapeLispString(toAutoLispPath(outputFilePath))}")
+${buildProgressHelpersLisp(progressFilePath)}
+(vl-load-com)
+
+(defun fmdb-string-has (haystack needle)
+  (and haystack needle (wcmatch (strcase haystack) (strcat "*" (strcase needle) "*")))
+)
+
+(defun fmdb-format-real (value)
+  (rtos value 2 8)
+)
+
+(defun fmdb-point-to-list (value / variant safearray)
+  (cond
+    ((= (type value) 'LIST) value)
+    ((= (type value) 'VARIANT)
+      (setq variant (vlax-variant-value value))
+      (if (= (type variant) 'SAFEARRAY)
+        (vlax-safearray->list variant)
+        nil
+      )
+    )
+    ((= (type value) 'SAFEARRAY) (vlax-safearray->list value))
+    (t nil)
+  )
+)
+
+(defun fmdb-get-text (object / value)
+  (setq value nil)
+  (if (vlax-property-available-p object 'TextString)
+    (setq value (vl-catch-all-apply 'vlax-get (list object 'TextString)))
+  )
+  (if (vl-catch-all-error-p value)
+    nil
+    value
+  )
+)
+
+(defun fmdb-get-point (object / value point)
+  (setq point nil)
+  (foreach property '(TextLocation InsertionPoint TextAlignmentPoint)
+    (if (and (not point) (vlax-property-available-p object property))
+      (progn
+        (setq value (vl-catch-all-apply 'vlax-get (list object property)))
+        (if (not (vl-catch-all-error-p value))
+          (setq point (fmdb-point-to-list value))
+        )
+      )
+    )
+  )
+  point
+)
+
+(defun fmdb-boring-reference-p (text)
+  (and text
+       (or
+         (fmdb-string-has text ".DWG")
+         (fmdb-string-has text " DWG")
+         (fmdb-string-has text "BORING")
+       )
+  )
+)
+
+(defun c:FIBER_EXPORT_BORING_REFERENCES (/ document modelspace handle object objectName text point x y z output total)
+  (setq document (vla-get-ActiveDocument (vlax-get-acad-object)))
+  (setq modelspace (vla-get-ModelSpace document))
+  (setq output (open fmdb-output-file "w"))
+  (setq total 0)
+  (fmdb-report-stage "scan")
+  (if output
+    (progn
+      (vlax-for object modelspace
+        (setq objectName (vla-get-ObjectName object))
+        (if (member objectName '("AcDbMLeader" "AcDbMText" "AcDbText"))
+          (progn
+            (setq text (fmdb-get-text object))
+            (setq point (fmdb-get-point object))
+            (if (and (fmdb-boring-reference-p text) point)
+              (progn
+                (setq handle (vla-get-Handle object))
+                (setq x (if (car point) (car point) 0.0))
+                (setq y (if (cadr point) (cadr point) 0.0))
+                (setq z (if (caddr point) (caddr point) 0.0))
+                (write-line
+                  (strcat handle (chr 9) text (chr 9) (fmdb-format-real x) (chr 9) (fmdb-format-real y) (chr 9) (fmdb-format-real z) (chr 9) objectName)
+                  output
+                )
+                (setq total (1+ total))
+              )
+            )
+          )
+        )
+      )
+      (close output)
+    )
+  )
+  (fmdb-report-result "FOUND" (itoa total))
+  (fmdb-report-done "EXPORT_BORING_REFERENCES")
+  (princ)
+)
+`;
+}
+
+function buildApplyBoringRenamesLisp({ renameItems, progressFilePath }) {
+  const embeddedItems = toBoringRenameLispData(renameItems);
+  return `(setq fmdb-boring-renames '${embeddedItems})
+${buildProgressHelpersLisp(progressFilePath)}
+(vl-load-com)
+
+(defun fmdb-set-text (object value / result)
+  (setq result nil)
+  (if (vlax-property-available-p object 'TextString)
+    (progn
+      (setq result (vl-catch-all-apply 'vlax-put (list object 'TextString value)))
+      (not (vl-catch-all-error-p result))
+    )
+    nil
+  )
+)
+
+(defun c:FIBER_APPLY_BORING_RENAMES (/ document modelspace item targetHandle newText object updated total)
+  (setq document (vla-get-ActiveDocument (vlax-get-acad-object)))
+  (setq modelspace (vla-get-ModelSpace document))
+  (setq updated 0)
+  (setq total (length fmdb-boring-renames))
+  (fmdb-report-stage "update")
+  (if (> total 0)
+    (fmdb-report-progress 0 total)
+  )
+  (foreach item fmdb-boring-renames
+    (setq targetHandle (strcase (nth 0 item)))
+    (setq newText (nth 1 item))
+    (vlax-for object modelspace
+      (if (= (strcase (vla-get-Handle object)) targetHandle)
+        (if (fmdb-set-text object newText)
+          (setq updated (1+ updated))
+        )
+      )
+    )
+    (fmdb-report-progress updated total)
+  )
+  (fmdb-report-result "UPDATED" (itoa updated))
+  (fmdb-report-done "APPLY_BORING_RENAMES")
   (princ)
 )
 `;
@@ -1083,6 +1244,481 @@ async function removeFileIfExists(targetPath) {
     if (error?.code !== 'ENOENT') {
       throw error;
     }
+  }
+}
+
+function getProjectLabel(projectFolderPath) {
+  const resolved = path.resolve(String(projectFolderPath ?? '').trim());
+  const folderName = path.basename(resolved);
+  const match = /^(?<project>.+)-B\d+$/i.exec(folderName);
+  return normalizeText(match?.groups?.project) ?? folderName;
+}
+
+function normalizeBoringReference(value) {
+  const text = normalizeText(value);
+  if (!text) {
+    return null;
+  }
+
+  return text
+    .replace(/\.dwg\b/gi, '')
+    .replace(/\bdwg\b/gi, '')
+    .replace(/[^a-z0-9]+/gi, '')
+    .toLowerCase()
+    || null;
+}
+
+function sortBoringReference(left, right) {
+  const xDelta = Number(left.x ?? 0) - Number(right.x ?? 0);
+  if (Math.abs(xDelta) > 0.000001) {
+    return xDelta;
+  }
+
+  const yDelta = Number(left.y ?? 0) - Number(right.y ?? 0);
+  if (Math.abs(yDelta) > 0.000001) {
+    return yDelta;
+  }
+
+  return String(left.text ?? '').localeCompare(String(right.text ?? ''));
+}
+
+async function getBoringDwgFiles(projectFolderPath) {
+  const boringFolderPath = path.join(projectFolderPath, 'Boringen');
+  if (!(await pathExists(boringFolderPath))) {
+    throw new Error(`No se ha encontrado la carpeta Boringen en ${projectFolderPath}.`);
+  }
+
+  const entries = await fsp.readdir(boringFolderPath, { withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isFile() && path.extname(entry.name).toLowerCase() === '.dwg')
+    .map((entry) => {
+      const fullPath = path.join(boringFolderPath, entry.name);
+      return {
+        name: entry.name,
+        fullPath,
+        matchKey: normalizeBoringReference(path.basename(entry.name, path.extname(entry.name)))
+      };
+    });
+}
+
+function parseBoringReferenceExport(text) {
+  return String(text ?? '')
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((line) => normalizeText(line))
+    .filter(Boolean)
+    .map((line) => {
+      const [handle, rawText, x, y, z, entityType] = line.split('\t');
+      return {
+        handle: normalizeText(handle),
+        text: normalizeText(rawText),
+        matchKey: normalizeBoringReference(rawText),
+        x: Number(x ?? 0),
+        y: Number(y ?? 0),
+        z: Number(z ?? 0),
+        entityType: normalizeText(entityType)
+      };
+    })
+    .filter((item) => item.handle && item.text && item.matchKey && Number.isFinite(item.x) && Number.isFinite(item.y));
+}
+
+async function extractBoringReferencesFromDwg(projectFolderPath, options = {}) {
+  const dwgPath = await getFirstDwgPath(projectFolderPath);
+  if (!dwgPath) {
+    throw new Error('No se ha encontrado un DWG en la carpeta del proyecto.');
+  }
+
+  const projectToken = path.basename(path.resolve(projectFolderPath)).replace(/[^A-Za-z0-9._-]+/g, '_');
+  const scriptToken = `${projectToken}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const lispFilePath = path.join(os.tmpdir(), `fiber-export-borings-${scriptToken}.lsp`);
+  const progressFilePath = path.join(os.tmpdir(), `fiber-export-borings-${scriptToken}.progress`);
+  const outputFilePath = path.join(os.tmpdir(), `fiber-export-borings-${scriptToken}.txt`);
+  const scriptFilePath = path.join(os.tmpdir(), `fiber-export-borings-${scriptToken}.scr`);
+  const timeoutMs = 90000;
+  let usedOpenDocument = false;
+  let accoreConsolePath = null;
+
+  try {
+    await removeFileIfExists(progressFilePath);
+    await removeFileIfExists(outputFilePath);
+    await fsp.writeFile(
+      lispFilePath,
+      buildExportBoringReferencesLisp({ outputFilePath, progressFilePath }),
+      'utf8'
+    );
+
+    if (typeof options.onStage === 'function') {
+      options.onStage('scan');
+    }
+
+    const openDocumentResult = await tryRunCommandOnOpenDocument({
+      dwgPath,
+      lispFilePath,
+      commandName: EXPORT_BORING_REFERENCES_COMMAND_NAME,
+      progressFilePath,
+      outputFilePath,
+      timeoutMs,
+      saveDocument: false
+    });
+
+    if (openDocumentResult?.handled) {
+      usedOpenDocument = true;
+    }
+    else {
+      accoreConsolePath = await findAccoreConsolePath();
+      if (!accoreConsolePath) {
+        throw new Error('No se ha encontrado accoreconsole.exe. Hace falta AutoCAD abierto o una instalacion local de AutoCAD.');
+      }
+
+      await runAccoreConsoleCommand({
+        accoreConsolePath,
+        dwgPath,
+        lispFilePath,
+        scriptFilePath,
+        commandName: EXPORT_BORING_REFERENCES_COMMAND_NAME,
+        timeoutMs,
+        saveDocument: false
+      });
+    }
+
+    if (!(await pathExists(outputFilePath))) {
+      throw new Error('AutoCAD no ha generado el fichero temporal de referencias de Boringen.');
+    }
+
+    const references = parseBoringReferenceExport(await fsp.readFile(outputFilePath, 'utf8'));
+    return {
+      dwgPath,
+      usedOpenDocument,
+      accoreConsolePath,
+      references
+    };
+  }
+  finally {
+    await removeFileIfExists(progressFilePath);
+    await removeFileIfExists(outputFilePath);
+    await removeFileIfExists(lispFilePath);
+  }
+}
+
+function buildBoringRenamePlan({ projectLabel, references, boringFiles }) {
+  const filesByKey = new Map();
+  const duplicateFileKeys = new Set();
+
+  for (const file of boringFiles) {
+    if (!file.matchKey) {
+      continue;
+    }
+
+    if (filesByKey.has(file.matchKey)) {
+      duplicateFileKeys.add(file.matchKey);
+      continue;
+    }
+
+    filesByKey.set(file.matchKey, file);
+  }
+
+  if (duplicateFileKeys.size > 0) {
+    throw new Error(`Hay DWG de Boringen con nombres ambiguos o duplicados: ${[...duplicateFileKeys].join(', ')}.`);
+  }
+
+  const usedFileKeys = new Set();
+  const matched = [];
+  const unmatchedReferences = [];
+
+  for (const reference of [...references].sort(sortBoringReference)) {
+    const file = filesByKey.get(reference.matchKey);
+    if (!file) {
+      unmatchedReferences.push(reference);
+      continue;
+    }
+
+    usedFileKeys.add(reference.matchKey);
+    matched.push({
+      ...reference,
+      file
+    });
+  }
+
+  const boringFolderPath = boringFiles.length > 0 ? path.dirname(boringFiles[0].fullPath) : null;
+  const usedTargetNames = new Set();
+  const items = matched.map((item, index) => {
+    const number = String(index + 1).padStart(2, '0');
+    const newName = `${projectLabel}-Boring${number}.dwg`;
+    const targetPath = path.join(boringFolderPath, newName);
+    const sourcePath = item.file.fullPath;
+    const needsFileRename = path.resolve(sourcePath).toLowerCase() !== path.resolve(targetPath).toLowerCase();
+    const needsTextUpdate = normalizeText(item.text) !== newName;
+
+    if (usedTargetNames.has(newName.toLowerCase())) {
+      throw new Error(`Nombre de Boring duplicado calculado: ${newName}.`);
+    }
+    usedTargetNames.add(newName.toLowerCase());
+
+    return {
+      handle: item.handle,
+      oldText: item.text,
+      newText: newName,
+      oldFileName: item.file.name,
+      newFileName: newName,
+      sourcePath,
+      targetPath,
+      x: item.x,
+      y: item.y,
+      z: item.z,
+      entityType: item.entityType,
+      needsFileRename,
+      needsTextUpdate
+    };
+  });
+
+  const unmatchedFiles = boringFiles
+    .filter((file) => file.matchKey && !usedFileKeys.has(file.matchKey))
+    .map((file) => file.name)
+    .sort((left, right) => left.localeCompare(right));
+
+  return {
+    items,
+    unmatchedReferences,
+    unmatchedFiles
+  };
+}
+
+async function assertBoringRenameTargetsAvailable(items) {
+  for (const item of items) {
+    if (!item.needsFileRename) {
+      continue;
+    }
+
+    if (await pathExists(item.targetPath)) {
+      throw new Error(`No se puede renombrar ${item.oldFileName}: ya existe ${item.newFileName}.`);
+    }
+  }
+}
+
+async function renameBoringFiles(items) {
+  const renamed = [];
+  try {
+    for (const item of items) {
+      if (!item.needsFileRename) {
+        continue;
+      }
+
+      await fsp.rename(item.sourcePath, item.targetPath);
+      renamed.push(item);
+    }
+  }
+  catch (error) {
+    for (const item of [...renamed].reverse()) {
+      try {
+        await fsp.rename(item.targetPath, item.sourcePath);
+      }
+      catch {
+      }
+    }
+
+    throw error;
+  }
+
+  return renamed;
+}
+
+async function rollbackBoringRenames(renamedItems) {
+  for (const item of [...renamedItems].reverse()) {
+    try {
+      if ((await pathExists(item.targetPath)) && !(await pathExists(item.sourcePath))) {
+        await fsp.rename(item.targetPath, item.sourcePath);
+      }
+    }
+    catch {
+    }
+  }
+}
+
+async function applyBoringTextRenames({ projectFolderPath, dwgPath, items, options = {} }) {
+  const projectToken = path.basename(path.resolve(projectFolderPath)).replace(/[^A-Za-z0-9._-]+/g, '_');
+  const scriptToken = `${projectToken}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const lispFilePath = path.join(os.tmpdir(), `fiber-apply-borings-${scriptToken}.lsp`);
+  const progressFilePath = path.join(os.tmpdir(), `fiber-apply-borings-${scriptToken}.progress`);
+  const scriptFilePath = path.join(os.tmpdir(), `fiber-apply-borings-${scriptToken}.scr`);
+  const timeoutMs = Math.max(90000, items.length * 2500);
+  let usedOpenDocument = false;
+  let accoreConsolePath = null;
+  let updatedTextCount = 0;
+
+  try {
+    await removeFileIfExists(progressFilePath);
+    await fsp.writeFile(
+      lispFilePath,
+      buildApplyBoringRenamesLisp({ renameItems: items, progressFilePath }),
+      'utf8'
+    );
+
+    const progressMonitor = startProgressMonitor(progressFilePath, {
+      onStage: (stage) => {
+        if (typeof options.onStage === 'function') {
+          options.onStage(stage);
+        }
+      },
+      onResult: (result) => {
+        if (result.name === 'UPDATED') {
+          const parsedValue = Number(result.value);
+          if (Number.isFinite(parsedValue)) {
+            updatedTextCount = parsedValue;
+          }
+        }
+      }
+    });
+
+    try {
+      const openDocumentResult = await tryRunCommandOnOpenDocument({
+        dwgPath,
+        lispFilePath,
+        commandName: APPLY_BORING_RENAMES_COMMAND_NAME,
+        progressFilePath,
+        timeoutMs,
+        saveDocument: true
+      });
+
+      if (openDocumentResult?.handled) {
+        usedOpenDocument = true;
+      }
+      else {
+        accoreConsolePath = await findAccoreConsolePath();
+        if (!accoreConsolePath) {
+          throw new Error('No se ha encontrado accoreconsole.exe. Hace falta AutoCAD abierto o una instalacion local de AutoCAD.');
+        }
+
+        await runAccoreConsoleCommand({
+          accoreConsolePath,
+          dwgPath,
+          lispFilePath,
+          scriptFilePath,
+          commandName: APPLY_BORING_RENAMES_COMMAND_NAME,
+          timeoutMs,
+          saveDocument: true
+        });
+      }
+    }
+    finally {
+      await progressMonitor.stop();
+    }
+
+    return {
+      usedOpenDocument,
+      accoreConsolePath,
+      updatedTextCount,
+      manualScriptPath: scriptFilePath
+    };
+  }
+  finally {
+    await removeFileIfExists(progressFilePath);
+    await removeFileIfExists(lispFilePath);
+  }
+}
+
+async function writeBoringRenameLog({ projectFolderPath, dwgPath, boringFolderPath, items }) {
+  const logPath = path.join(boringFolderPath, 'BORING_conversiones.txt');
+  const lines = [
+    '',
+    '============================================================',
+    `Fecha=${new Date().toISOString()}`,
+    `Proyecto=${projectFolderPath}`,
+    `DWG=${dwgPath}`,
+    `Boringen=${boringFolderPath}`
+  ];
+
+  for (const [index, item] of items.entries()) {
+    lines.push('---');
+    lines.push(`Orden=${index + 1}`);
+    lines.push(`Handle=${item.handle}`);
+    lines.push(`X=${item.x}`);
+    lines.push(`Y=${item.y}`);
+    lines.push(`TextoOriginal=${item.oldText}`);
+    lines.push(`TextoNuevo=${item.newText}`);
+    lines.push(`ArchivoOriginal=${item.oldFileName}`);
+    lines.push(`ArchivoNuevo=${item.newFileName}`);
+  }
+
+  lines.push('');
+  await fsp.appendFile(logPath, lines.join('\n'), 'utf8');
+  return logPath;
+}
+
+async function createGestuurdeBoringen(projectFolderPath, options = {}) {
+  if (typeof options.onStage === 'function') {
+    options.onStage('files');
+  }
+
+  const resolvedProjectFolder = path.resolve(String(projectFolderPath ?? '').trim());
+  const projectLabel = getProjectLabel(resolvedProjectFolder);
+  const boringFiles = await getBoringDwgFiles(resolvedProjectFolder);
+  if (boringFiles.length === 0) {
+    throw new Error(`No se han encontrado archivos DWG en ${path.join(resolvedProjectFolder, 'Boringen')}.`);
+  }
+
+  const extraction = await extractBoringReferencesFromDwg(resolvedProjectFolder, options);
+  if (extraction.references.length === 0) {
+    throw new Error('No se han encontrado referencias DWG en multileaders/textos del dibujo principal.');
+  }
+
+  if (typeof options.onStage === 'function') {
+    options.onStage('plan');
+  }
+
+  const plan = buildBoringRenamePlan({
+    projectLabel,
+    references: extraction.references,
+    boringFiles
+  });
+
+  if (plan.items.length === 0) {
+    throw new Error('No se ha podido emparejar ninguna referencia del DWG con archivos dentro de Boringen.');
+  }
+
+  await assertBoringRenameTargetsAvailable(plan.items);
+
+  if (typeof options.onStage === 'function') {
+    options.onStage('rename');
+  }
+
+  const renamedItems = await renameBoringFiles(plan.items);
+  try {
+    const applyResult = await applyBoringTextRenames({
+      projectFolderPath: resolvedProjectFolder,
+      dwgPath: extraction.dwgPath,
+      items: plan.items,
+      options
+    });
+
+    if (applyResult.updatedTextCount < plan.items.length) {
+      throw new Error(`AutoCAD solo ha actualizado ${applyResult.updatedTextCount} referencias de ${plan.items.length}.`);
+    }
+
+    const logPath = await writeBoringRenameLog({
+      projectFolderPath: resolvedProjectFolder,
+      dwgPath: extraction.dwgPath,
+      boringFolderPath: path.dirname(boringFiles[0].fullPath),
+      items: plan.items
+    });
+
+    return {
+      projectLabel,
+      dwgPath: extraction.dwgPath,
+      boringFolderPath: path.dirname(boringFiles[0].fullPath),
+      logPath,
+      referenceCount: extraction.references.length,
+      matchedCount: plan.items.length,
+      renamedFileCount: renamedItems.length,
+      updatedTextCount: applyResult.updatedTextCount,
+      unmatchedFiles: plan.unmatchedFiles,
+      unmatchedReferences: plan.unmatchedReferences.map((item) => item.text),
+      usedOpenDocument: extraction.usedOpenDocument || applyResult.usedOpenDocument,
+      accoreConsolePath: extraction.accoreConsolePath || applyResult.accoreConsolePath
+    };
+  }
+  catch (error) {
+    await rollbackBoringRenames(renamedItems);
+    throw error;
   }
 }
 
@@ -1953,6 +2589,7 @@ module.exports = {
   CUSTOMER_LAYER_COLORS,
   drawAccessnetWithoutAddressFromCheck,
   clearCustomerCoordinatesInDwg,
+  createGestuurdeBoringen,
   drawCustomerCoordinatesToDwg,
   extractCustomerTextCoordinates,
   extractOapCoordinate,

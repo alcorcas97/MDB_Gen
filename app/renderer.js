@@ -28,6 +28,7 @@ const elements = {
   removeExtraRolesButton: document.getElementById('removeExtraRolesButton'),
   drawAccessnetWithoutAddressButton: document.getElementById('drawAccessnetWithoutAddressButton'),
   applyDempingContingencyButton: document.getElementById('applyDempingContingencyButton'),
+  createGestuurdeBoringenButton: document.getElementById('createGestuurdeBoringenButton'),
   getOapCoordinateButton: document.getElementById('getOapCoordinateButton'),
   cancelButton: document.getElementById('cancelButton'),
   openOutputButton: document.getElementById('openOutputButton'),
@@ -146,6 +147,7 @@ function setRunningState(running, cancelAvailable = false) {
     elements.extractCustomerCoordinatesButton,
     elements.moveResvCoordinatesToDpButton,
     elements.reextractDpCoordinatesButton,
+    elements.createGestuurdeBoringenButton,
     elements.removeExtraRolesButton,
     elements.drawAccessnetWithoutAddressButton,
     elements.applyDempingContingencyButton,
@@ -1086,6 +1088,15 @@ async function getOapCoordinate() {
   });
 }
 
+async function createGestuurdeBoringen() {
+  await runProjectTool({
+    startMessage: 'Creando gestuurde boringen desde DWG y carpeta Boringen...',
+    successMessage: (result) => `Boringen creados: ${result.renamedFileCount} archivos y ${result.updatedTextCount} referencias actualizadas.`,
+    successLog: (result) => `Gestuurde boringen completado. Referencias detectadas: ${result.referenceCount}. Emparejadas: ${result.matchedCount}. Archivos renombrados: ${result.renamedFileCount}. Textos actualizados: ${result.updatedTextCount}. TXT: ${result.logPath}. Sin archivo: ${(result.unmatchedReferences ?? []).length}. Archivos sin referencia: ${(result.unmatchedFiles ?? []).length}.`,
+    action: (payload) => fiberDesktopApi.createGestuurdeBoringen(payload)
+  });
+}
+
 async function removeExtraRoles() {
   await runProjectTool({
     startMessage: 'Buscando errores M-30173 en el check y eliminando bloques ROL extra...',
@@ -1237,6 +1248,10 @@ elements.moveResvCoordinatesToDpButton.addEventListener('click', () => {
 
 elements.reextractDpCoordinatesButton.addEventListener('click', () => {
   void reextractDpCoordinates();
+});
+
+elements.createGestuurdeBoringenButton.addEventListener('click', () => {
+  void createGestuurdeBoringen();
 });
 
 elements.removeExtraRolesButton.addEventListener('click', () => {

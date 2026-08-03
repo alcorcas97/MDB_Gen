@@ -3653,6 +3653,84 @@ ipcMain.handle('dwg:draw-accessnet-without-address', async (_event, payload) => 
   return result;
 });
 
+ipcMain.handle('dwg:create-gestuurde-boringen', async (_event, payload) => {
+  if (activeRun) {
+    throw new Error('Ya hay una operacion en curso.');
+  }
+
+  validateProjectAndMdbInput(payload);
+
+  sendGenerationEvent({
+    type: 'status',
+    message: 'Leyendo carpeta Boringen y referencias del DWG...'
+  });
+
+  const { createGestuurdeBoringen } = getDwgToolsModule();
+  const result = await createGestuurdeBoringen(payload.projectFolderPath, {
+    onStage: (stage) => {
+      const messages = {
+        files: 'Leyendo archivos DWG de Boringen...',
+        scan: 'Escaneando multileaders/textos de boringen en AutoCAD...',
+        plan: 'Calculando orden y nombres BoringXX...',
+        rename: 'Renombrando archivos de Boringen...',
+        update: 'Actualizando referencias en el DWG principal...'
+      };
+      const message = messages[String(stage ?? '').toLowerCase()];
+      if (!message) {
+        return;
+      }
+
+      sendGenerationEvent({
+        type: 'status',
+        message
+      });
+    }
+  });
+
+  if (result.usedOpenDocument) {
+    sendGenerationEvent({
+      type: 'log',
+      level: 'info',
+      message: 'DWG abierto detectado en AutoCAD. Las referencias de boringen se han actualizado sobre el documento abierto.\n'
+    });
+  }
+
+  sendGenerationEvent({
+    type: 'log',
+    level: 'info',
+    message: `Gestuurde boringen: proyecto ${result.projectLabel}. Referencias detectadas: ${result.referenceCount}. Emparejadas: ${result.matchedCount}. Archivos renombrados: ${result.renamedFileCount}. Textos actualizados: ${result.updatedTextCount}.\n`
+  });
+
+  if (Array.isArray(result.unmatchedFiles) && result.unmatchedFiles.length > 0) {
+    sendGenerationEvent({
+      type: 'log',
+      level: 'warning',
+      message: `Archivos DWG de Boringen sin referencia en el dibujo:\n${result.unmatchedFiles.slice(0, 80).map((name) => `- ${name}`).join('\n')}\n`
+    });
+  }
+
+  if (Array.isArray(result.unmatchedReferences) && result.unmatchedReferences.length > 0) {
+    sendGenerationEvent({
+      type: 'log',
+      level: 'warning',
+      message: `Referencias del dibujo sin archivo DWG en Boringen:\n${result.unmatchedReferences.slice(0, 80).map((name) => `- ${name}`).join('\n')}\n`
+    });
+  }
+
+  sendGenerationEvent({
+    type: 'log',
+    level: 'info',
+    message: `Registro de conversiones guardado en ${result.logPath}\n`
+  });
+
+  sendGenerationEvent({
+    type: 'status',
+    message: 'Gestuurde boringen creados correctamente.'
+  });
+
+  return result;
+});
+
 ipcMain.handle('dwg:get-oap-coordinate', async (_event, payload) => {
   if (activeRun) {
     throw new Error('Ya hay una operacion en curso.');
