@@ -66,7 +66,12 @@ async function getFirstDwgPath(projectFolderPath) {
   }
 
   const entries = await fsp.readdir(projectFolderPath, { withFileTypes: true });
-  const dwgEntry = entries.find((entry) => entry.isFile() && path.extname(entry.name).toLowerCase() === '.dwg');
+  const dwgEntries = entries
+    .filter((entry) => entry.isFile() && path.extname(entry.name).toLowerCase() === '.dwg')
+    .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }));
+  const expectedName = `${path.basename(path.resolve(projectFolderPath))}.dwg`;
+  const dwgEntry = dwgEntries.find((entry) => entry.name.toLowerCase() === expectedName.toLowerCase())
+    ?? dwgEntries[0];
   return dwgEntry ? path.join(projectFolderPath, dwgEntry.name) : null;
 }
 
@@ -751,7 +756,7 @@ ${buildProgressHelpersLisp(progressFilePath)}
   )
 )
 
-(defun fmdb-get-point (object / value point)
+(defun fmdb-get-point (object / value point minimumPoint maximumPoint minimumList maximumList)
   (setq point nil)
   (foreach property '(TextLocation InsertionPoint TextAlignmentPoint)
     (if (and (not point) (vlax-property-available-p object property))
@@ -759,6 +764,22 @@ ${buildProgressHelpersLisp(progressFilePath)}
         (setq value (vl-catch-all-apply 'vlax-get (list object property)))
         (if (not (vl-catch-all-error-p value))
           (setq point (fmdb-point-to-list value))
+        )
+      )
+    )
+  )
+  (if (not point)
+    (progn
+      (vla-GetBoundingBox object 'minimumPoint 'maximumPoint)
+      (setq minimumList (fmdb-point-to-list minimumPoint))
+      (setq maximumList (fmdb-point-to-list maximumPoint))
+      (if (and minimumList maximumList)
+        (setq point
+          (list
+            (/ (+ (car minimumList) (car maximumList)) 2.0)
+            (/ (+ (cadr minimumList) (cadr maximumList)) 2.0)
+            (/ (+ (caddr minimumList) (caddr maximumList)) 2.0)
+          )
         )
       )
     )
@@ -1358,6 +1379,7 @@ async function extractBoringReferencesFromDwg(projectFolderPath, options = {}) {
   const timeoutMs = 90000;
   let usedOpenDocument = false;
   let accoreConsolePath = null;
+  let completed = false;
 
   try {
     await removeFileIfExists(progressFilePath);
@@ -1405,10 +1427,14 @@ async function extractBoringReferencesFromDwg(projectFolderPath, options = {}) {
     if (!(await pathExists(outputFilePath))) {
       const progressText = await fsp.readFile(progressFilePath, 'utf8').catch(() => '');
       const suffix = progressText ? ` Ultimo progreso de AutoCAD: ${progressText.replace(/\s+/g, ' ').trim()}` : '';
-      throw new Error(`AutoCAD no ha generado el fichero temporal de referencias de Boringen.${suffix}`);
+      throw new Error(
+        `AutoCAD no ha generado el fichero temporal de referencias de Boringen.${suffix} `
+        + `DWG analizado: ${dwgPath}. Diagnostico conservado en ${lispFilePath}.`
+      );
     }
 
     const references = parseBoringReferenceExport(await fsp.readFile(outputFilePath, 'utf8'));
+    completed = true;
     return {
       dwgPath,
       usedOpenDocument,
@@ -1417,9 +1443,11 @@ async function extractBoringReferencesFromDwg(projectFolderPath, options = {}) {
     };
   }
   finally {
-    await removeFileIfExists(progressFilePath);
-    await removeFileIfExists(outputFilePath);
-    await removeFileIfExists(lispFilePath);
+    if (completed) {
+      await removeFileIfExists(progressFilePath);
+      await removeFileIfExists(outputFilePath);
+      await removeFileIfExists(lispFilePath);
+    }
   }
 }
 
