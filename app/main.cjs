@@ -1500,6 +1500,8 @@ async function extractDempingContingencyItems(projectFolderPath) {
     const fields = {};
     const klantId = getCheckValue(row, ['klant_id', 'klantid', 'klant id']);
     const kabel = getCheckValue(row, ['kabel']);
+    const vezelnr1 = String(getCheckValue(row, ['vezelnr1', 'vezel nr1', 'vezelnummer1']) ?? '').trim();
+    const vezelnr2 = String(getCheckValue(row, ['vezelnr2', 'vezel nr2', 'vezelnummer2']) ?? '').trim();
 
     if (nonTerminatedKeys.has(getDempingItemKey({ klantId, kabel }))) {
       continue;
@@ -1514,6 +1516,17 @@ async function extractDempingContingencyItems(projectFolderPath) {
       const numericValue = Number(rawValue.replace(',', '.'));
       if (Number.isFinite(numericValue) && numericValue > 0) {
         fields[accessField] = -1 * Math.abs(numericValue);
+      }
+    }
+
+    // Some M-30005 rows report an empty attenuation for an existing fiber.
+    // There is no positive value to negate, so use the standard contingency value.
+    if (Object.keys(fields).length === 0) {
+      if (vezelnr1) {
+        fields.Dempingswaarde1A = -2.2;
+      }
+      if (vezelnr2) {
+        fields.Dempingswaarde2A = -2.2;
       }
     }
 
