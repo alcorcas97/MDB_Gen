@@ -2457,6 +2457,13 @@ function Apply-FcRefresh {
     $existingCustomerRows = @(Get-TableRows -Database $Database -TableName 'Klant')
     $existingCableRows = @(Get-TableRows -Database $Database -TableName 'Kabel')
     $ductCableLookup = Get-DuctCableLookup -Database $Database
+    $noDempingCableLookup = @{}
+    foreach ($cableIdValue in @(Get-JsonPropertyValue -Object $sourceData -Names @('NoDempingCableIds'))) {
+        $normalizedCableId = Normalize-Text $cableIdValue
+        if ($null -ne $normalizedCableId) {
+            $noDempingCableLookup[$normalizedCableId.ToUpperInvariant()] = $true
+        }
+    }
 
     $existingCustomersByKey = @{}
     foreach ($row in $existingCustomerRows) {
@@ -2494,6 +2501,12 @@ function Apply-FcRefresh {
         $key = Get-ConnectionSyncKey -TableName 'Klant' -Row $sourceRow
         $existingRow = if ($null -ne $key -and $existingCustomersByKey.ContainsKey($key)) { $existingCustomersByKey[$key] } else { $null }
         $mergedRow = Merge-FcRefreshRow -TableName 'Klant' -SourceRow $sourceRow -ExistingRow $existingRow
+        $customerCableId = Normalize-Text $mergedRow.Kabel
+        if ($null -ne $customerCableId -and $noDempingCableLookup.ContainsKey($customerCableId.ToUpperInvariant())) {
+            foreach ($fieldName in @('Dempingswaarde1A', 'Dempingswaarde1Z', 'Dempingswaarde2A', 'Dempingswaarde2Z')) {
+                $mergedRow.$fieldName = $null
+            }
+        }
         $targetCustomerRows += $mergedRow
 
         $diff = Compare-RowChangeCount -ExistingRow $existingRow -TargetRow $mergedRow
