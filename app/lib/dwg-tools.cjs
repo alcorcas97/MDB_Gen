@@ -35,7 +35,8 @@ const CUSTOMER_LAYER_COLORS = new Map([
   ['WNK', 3],
   ['RESV', 6],
   ['SMK', 3],
-  ['SWON', 3]
+  ['SWON', 3],
+  ['XXXX', 30]
 ]);
 
 function normalizeText(value) {
