@@ -54,7 +54,7 @@ test('extraction AutoLISP filters TEXT and Accessnet LWPOLYLINE only', () => {
   assertBalancedLisp(lisp);
 });
 
-test('review AutoLISP covers justified text, preview, navigation, rollback and one undo mark', () => {
+test('review AutoLISP covers justified text, live move, navigation, rollback and one undo mark', () => {
   const model = buildPlacementModel({
     texts: [{ handle: '1', type: 'AcDbText', content: 'PHKT-1', point: { x: 0, y: 0, z: 0 } }],
     vertices: [{ polylineHandle: 'A', vertexIndex: 0, isEndpoint: true, x: 1, y: 0, z: 0 }],
@@ -64,12 +64,15 @@ test('review AutoLISP covers justified text, preview, navigation, rollback and o
   assert.match(lisp, /TextAlignmentPoint/);
   assert.match(lisp, /AcDbMText/);
   assert.match(lisp, /Siguiente Anterior Manual Omitir Volver Terminar Cancelar/);
-  assert.doesNotMatch(lisp, /<Aceptar>/);
-  assert.match(lisp, /grdraw/);
+  assert.match(lisp, /<Aceptar>/);
+  assert.doesNotMatch(lisp, /grdraw/);
   assert.doesNotMatch(lisp, /vla-ZoomWindow/);
+  assert.match(lisp, /fmdb-move-text-now/);
+  assert.match(lisp, /fmdb-save-document/);
+  assert.doesNotMatch(lisp, /Aplicar todos los movimientos/);
   assert.match(lisp, /vla-StartUndoMark/);
   assert.match(lisp, /vla-EndUndoMark/);
-  assert.match(lisp, /foreach item moved/);
+  assert.match(lisp, /fmdb-rollback-decisions/);
   assertBalancedLisp(lisp);
 });
 
