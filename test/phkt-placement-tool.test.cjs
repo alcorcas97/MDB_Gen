@@ -64,6 +64,7 @@ test('review AutoLISP covers justified text, preview, navigation, rollback and o
   assert.match(lisp, /TextAlignmentPoint/);
   assert.match(lisp, /AcDbMText/);
   assert.match(lisp, /Siguiente Anterior Manual Omitir Volver Terminar Cancelar/);
+  assert.doesNotMatch(lisp, /<Aceptar>/);
   assert.match(lisp, /grdraw/);
   assert.doesNotMatch(lisp, /vla-ZoomWindow/);
   assert.match(lisp, /vla-StartUndoMark/);

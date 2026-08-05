@@ -21,6 +21,22 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
+try {
+    Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class FmdbWindowTools {
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+}
+'@ -ErrorAction SilentlyContinue
+}
+catch {
+}
+
 function Resolve-NormalizedPath {
     param(
         [string]$Path,
@@ -122,13 +138,29 @@ function Focus-AutoCadWindow {
 
     try {
         $shell = New-Object -ComObject WScript.Shell
-        if (-not [string]::IsNullOrWhiteSpace($Document.Name)) {
+        $hwnd = $null
+        try {
+            $hwnd = [IntPtr]([int64]$Application.HWND)
+        }
+        catch {
+            $hwnd = $null
+        }
+
+        if ($null -ne $hwnd -and $hwnd -ne [IntPtr]::Zero) {
+            $processId = [uint32]0
+            [void][FmdbWindowTools]::GetWindowThreadProcessId($hwnd, [ref]$processId)
+            if ($processId -gt 0) {
+                [void]$shell.AppActivate([int]$processId)
+            }
+            [void][FmdbWindowTools]::SetForegroundWindow($hwnd)
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($Document.Name)) {
             [void]$shell.AppActivate($Document.Name)
         }
         else {
             [void]$shell.AppActivate('AutoCAD')
         }
-        Start-Sleep -Milliseconds 300
+        Start-Sleep -Milliseconds 600
     }
     catch {
     }

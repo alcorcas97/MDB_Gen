@@ -258,8 +258,13 @@ ${buildProgressHelpers(progressFilePath)}
         (t nil)))
 
 (defun fmdb-unhighlight ()
-  (foreach object fmdb-highlighted (if object (vl-catch-all-apply 'vla-Highlight (list object :vlax-false))))
-  (setq fmdb-highlighted nil) (redraw))
+  (if fmdb-highlighted
+    (progn
+      (foreach object fmdb-highlighted (if object (vl-catch-all-apply 'vla-Highlight (list object :vlax-false))))
+      (setq fmdb-highlighted nil)
+      (redraw)
+    )
+  ))
 (defun fmdb-highlight (handle / object)
   (setq object (fmdb-object handle))
   (if object (progn (vl-catch-all-apply 'vla-Highlight (list object :vlax-true)) (setq fmdb-highlighted (cons object fmdb-highlighted)))))
@@ -300,8 +305,8 @@ ${buildProgressHelpers(progressFilePath)}
     " | Distancia: " (rtos (nth 2 candidate) 2 3) " | " (nth 4 candidate)
     " | ROL: " (if (= (nth 3 candidate) 1) "si" "no") " | Asignaciones: " (itoa assignments)))
   (initget "Aceptar Siguiente Anterior Manual Omitir Volver Terminar Cancelar")
-  (setq choice (getkword "\n[Aceptar/Siguiente/Anterior/Manual/Omitir/Volver/Terminar/Cancelar] <Aceptar>: "))
-  (if choice choice "Aceptar"))
+  (setq choice (getkword "\n[Aceptar/Siguiente/Anterior/Manual/Omitir/Volver/Terminar/Cancelar]: "))
+  choice)
 (defun fmdb-manual (text / point candidate choice)
   (setq point (getpoint "\nSeleccione cerca de un vertice real de Accessnet: "))
   (if point
@@ -312,8 +317,8 @@ ${buildProgressHelpers(progressFilePath)}
             " | " (nth 4 candidate) " | ROL: " (if (= (nth 3 candidate) 1) "si" "no")
             " | Asignaciones: " (itoa (fmdb-assignment-count (car candidate)))))
           (initget "Aceptar Cancelar")
-          (setq choice (getkword "\n[Aceptar/Cancelar] <Aceptar>: "))
-          (if (or (not choice) (= choice "Aceptar")) candidate nil))
+          (setq choice (getkword "\n[Aceptar/Cancelar]: "))
+          (if (= choice "Aceptar") candidate nil))
         nil)) nil))
 
 (defun fmdb-summary-values (/ assigned manual skipped noCandidates shared maximum candidateId count counts)
