@@ -108,6 +108,32 @@ function Send-DocumentCommand {
     $Document.SendCommand($CommandText + [Environment]::NewLine)
 }
 
+function Focus-AutoCadWindow {
+    param(
+        [__ComObject]$Application,
+        [__ComObject]$Document
+    )
+
+    try {
+        $Application.Visible = $true
+    }
+    catch {
+    }
+
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        if (-not [string]::IsNullOrWhiteSpace($Document.Name)) {
+            [void]$shell.AppActivate($Document.Name)
+        }
+        else {
+            [void]$shell.AppActivate('AutoCAD')
+        }
+        Start-Sleep -Milliseconds 300
+    }
+    catch {
+    }
+}
+
 function Get-LispFunctionSymbol {
     param([string]$CommandName)
 
@@ -257,6 +283,7 @@ switch ($Mode) {
             }
 
             $document.Activate()
+            Focus-AutoCadWindow -Application $application -Document $document
             Start-Sleep -Milliseconds 250
 
             Send-DocumentCommand -Document $document -CommandText (Get-DocumentExecutionExpression -LispPath $resolvedLispPath -CommandName $CommandName)

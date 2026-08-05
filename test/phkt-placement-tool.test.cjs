@@ -43,9 +43,11 @@ test('extraction parser handles DBText, MText, vertices and ROL records', () => 
   assert.equal(parsed.roles.length, 1);
 });
 
-test('extraction AutoLISP filters TEXT/MTEXT and Accessnet LWPOLYLINE only', () => {
+test('extraction AutoLISP filters TEXT and Accessnet LWPOLYLINE only', () => {
   const lisp = buildExtractionLisp({ outputFilePath: 'C:/tmp/out.tsv', progressFilePath: 'C:/tmp/progress', commandName: 'TEST_EXTRACT' });
-  assert.match(lisp, /TEXT,MTEXT/);
+  assert.match(lisp, /\(0 \. "TEXT"\)/);
+  assert.doesNotMatch(lisp, /TEXT,MTEXT/);
+  assert.match(lisp, /Reintentar Cancelar/);
   assert.match(lisp, /LWPOLYLINE/);
   assert.match(lisp, /ACCESSNET/);
   assert.match(lisp, /EffectiveName/);

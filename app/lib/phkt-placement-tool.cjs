@@ -83,6 +83,22 @@ ${buildProgressHelpers(progressFilePath)}
   (write-line (apply 'strcat (cons (car values) (mapcar '(lambda (value) (strcat "\t" value)) (cdr values)))) stream)
 )
 
+(defun fmdb-select-texts (/ result choice)
+  (setq result nil choice nil)
+  (while (and (not result) (not (= choice "Cancelar")))
+    (prompt "\nSeleccione SOLO objetos TEXT PHKT y pulse Enter: ")
+    (setq result (ssget '((0 . "TEXT"))))
+    (if (not result)
+      (progn
+        (initget "Reintentar Cancelar")
+        (setq choice (getkword "\nNo se ha seleccionado ningun TEXT. [Reintentar/Cancelar] <Reintentar>: "))
+        (if (not choice) (setq choice "Reintentar"))
+      )
+    )
+  )
+  result
+)
+
 (defun c:${commandName} (/ selection stream index entity object point allEntities maxParam vertexIndex vertexPoint objectName endpointCount textCount vertexCount rolCount oldError *error*)
   (setq textCount 0 vertexCount 0 rolCount 0)
   (setq oldError *error*)
@@ -93,8 +109,7 @@ ${buildProgressHelpers(progressFilePath)}
     (setq *error* oldError)
     (princ)))
   (fmdb-stage "select-texts")
-  (prompt "\nSeleccione los textos PHKT (TEXT o MTEXT) y pulse Enter: ")
-  (setq selection (ssget '((0 . "TEXT,MTEXT"))))
+  (setq selection (fmdb-select-texts))
   (setq stream (open fmdb-output-file "w"))
   (if (not stream)
     (progn (prompt "\nNo se pudo crear el fichero temporal.") (fmdb-done "error"))
