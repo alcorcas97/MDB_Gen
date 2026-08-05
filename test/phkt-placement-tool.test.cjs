@@ -67,6 +67,12 @@ test('review AutoLISP covers justified text, live move, navigation, rollback and
   assert.match(lisp, /<Aceptar>/);
   assert.doesNotMatch(lisp, /grdraw/);
   assert.doesNotMatch(lisp, /vla-ZoomWindow/);
+  assert.match(lisp, /vla-ZoomCenter/);
+  assert.match(lisp, /getvar "VIEWSIZE"/);
+  assert.match(lisp, /FMDB_PHKT_PREVIEW/);
+  assert.match(lisp, /vla-AddLine/);
+  assert.match(lisp, /vla-AddCircle/);
+  assert.match(lisp, /fmdb-clear-preview/);
   assert.match(lisp, /fmdb-move-text-now/);
   assert.match(lisp, /fmdb-save-document/);
   assert.doesNotMatch(lisp, /Aplicar todos los movimientos/);
