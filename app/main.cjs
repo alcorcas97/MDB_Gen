@@ -3212,6 +3212,52 @@ ipcMain.handle('dwg:draw-customers', async (_event, payload) => {
   };
 });
 
+ipcMain.handle('dwg:place-phkt-texts', async (_event, payload) => {
+  if (activeRun) {
+    throw new Error('Ya hay una operacion en curso.');
+  }
+
+  validateProjectAndMdbInput(payload);
+  sendGenerationEvent({
+    type: 'status',
+    message: 'Seleccione en AutoCAD los textos PHKT que desea revisar.'
+  });
+  sendGenerationEvent({
+    type: 'log',
+    level: 'info',
+    message: 'Iniciando asignacion PHKT. Durante la revision no se modificara ninguna entidad.\n'
+  });
+
+  const { placePhktTextsAtAccessnetVertices } = getDwgToolsModule();
+  const result = await placePhktTextsAtAccessnetVertices(payload.projectFolderPath, {
+    onStage: (stage) => {
+      const messages = {
+        'select-texts': 'Seleccione los textos PHKT en AutoCAD y pulse Enter.',
+        'extract-accessnet': 'Extrayendo vertices WCS de las polilineas Accessnet...',
+        'detect-rol': 'Detectando bloques ROL asociados a vertices...',
+        review: 'Revise cada texto desde la linea de comandos de AutoCAD.',
+        apply: 'Aplicando los movimientos confirmados como una sola operacion UNDO...'
+      };
+      sendGenerationEvent({ type: 'status', message: messages[stage] ?? `Asignacion PHKT: ${stage}` });
+    },
+    onModelReady: ({ textCount, rawVertexCount, candidateCount, rolCount, config }) => {
+      sendGenerationEvent({
+        type: 'log',
+        level: 'info',
+        message: `Modelo PHKT preparado: ${textCount} textos, ${rawVertexCount} vertices (${candidateCount} unicos), ${rolCount} bloques ROL. Radio: ${config.maxSearchRadius}; candidatos: ${config.maxCandidates}; tolerancia vertices: ${config.vertexMergeTolerance}; tolerancia ROL: ${config.rolVertexTolerance}.\n`
+      });
+    }
+  });
+
+  sendGenerationEvent({
+    type: 'status',
+    message: result.cancelled
+      ? 'Asignacion PHKT cancelada sin modificar el dibujo.'
+      : `Asignacion PHKT completada: ${result.assigned} textos movidos.`
+  });
+  return result;
+});
+
 ipcMain.handle('dwg:clear-customers', async (_event, payload) => {
   if (activeRun) {
     throw new Error('Ya hay una operacion en curso.');

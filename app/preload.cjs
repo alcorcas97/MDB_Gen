@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('fiberApp', {
   drawAccessnetWithoutAddress: (payload) => ipcRenderer.invoke('dwg:draw-accessnet-without-address', payload),
   applyDempingContingency: (payload) => ipcRenderer.invoke('mdb:apply-demping-contingency', payload),
   createGestuurdeBoringen: (payload) => ipcRenderer.invoke('dwg:create-gestuurde-boringen', payload),
+  placePhktTexts: (payload) => ipcRenderer.invoke('dwg:place-phkt-texts', payload),
   getOapCoordinate: (payload) => ipcRenderer.invoke('dwg:get-oap-coordinate', payload),
   pickRiserEtCoordinate: (payload) => ipcRenderer.invoke('dwg:pick-riser-et-coordinate', payload),
   cancelGeneration: () => ipcRenderer.invoke('generation:cancel'),

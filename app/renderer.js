@@ -29,6 +29,7 @@ const elements = {
   drawAccessnetWithoutAddressButton: document.getElementById('drawAccessnetWithoutAddressButton'),
   applyDempingContingencyButton: document.getElementById('applyDempingContingencyButton'),
   createGestuurdeBoringenButton: document.getElementById('createGestuurdeBoringenButton'),
+  placePhktTextsButton: document.getElementById('placePhktTextsButton'),
   getOapCoordinateButton: document.getElementById('getOapCoordinateButton'),
   cancelButton: document.getElementById('cancelButton'),
   openOutputButton: document.getElementById('openOutputButton'),
@@ -148,6 +149,7 @@ function setRunningState(running, cancelAvailable = false) {
     elements.moveResvCoordinatesToDpButton,
     elements.reextractDpCoordinatesButton,
     elements.createGestuurdeBoringenButton,
+    elements.placePhktTextsButton,
     elements.removeExtraRolesButton,
     elements.drawAccessnetWithoutAddressButton,
     elements.applyDempingContingencyButton,
@@ -580,6 +582,19 @@ async function drawCustomerCoordinates() {
     successMessage: (result) => `DWG actualizado con ${result.drawnCount} etiquetas de clientes.`,
     successLog: (result) => `Dibujo completado: ${result.drawnCount} textos escritos en el DWG.`,
     action: (payload) => fiberDesktopApi.drawCustomerCoordinates(payload)
+  });
+}
+
+async function placePhktTexts() {
+  await runProjectTool({
+    startMessage: 'Preparando asignacion interactiva de textos PHKT a vertices Accessnet...',
+    successMessage: (result) => result.cancelled
+      ? 'Asignacion PHKT cancelada sin modificar el dibujo.'
+      : `PHKT asignados: ${result.assigned} textos movidos.`,
+    successLog: (result) => result.cancelled
+      ? 'Revision PHKT cancelada. No se ha movido ningun texto.'
+      : `Asignacion PHKT completada. Seleccionados: ${result.selected}. Asignados: ${result.assigned}. Manuales: ${result.manual}. Omitidos: ${result.skipped}. Sin candidatos: ${result.withoutCandidates}. Vertices compartidos: ${result.sharedVertices}. Maximo en un vertice: ${result.maximumAssignments}.`,
+    action: (payload) => fiberDesktopApi.placePhktTexts(payload)
   });
 }
 
@@ -1252,6 +1267,10 @@ elements.reextractDpCoordinatesButton.addEventListener('click', () => {
 
 elements.createGestuurdeBoringenButton.addEventListener('click', () => {
   void createGestuurdeBoringen();
+});
+
+elements.placePhktTextsButton.addEventListener('click', () => {
+  void placePhktTexts();
 });
 
 elements.removeExtraRolesButton.addEventListener('click', () => {

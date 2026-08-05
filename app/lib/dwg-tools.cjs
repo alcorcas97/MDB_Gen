@@ -5,6 +5,16 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const { Dwg_File_Type, LibreDwg } = require('@mlightcad/libredwg-web');
+const {
+  DEFAULT_PHKT_PLACEMENT_CONFIG,
+  buildPlacementModel
+} = require('./phkt-placement-domain.cjs');
+const {
+  buildExtractionLisp: buildPhktExtractionLisp,
+  buildReviewLisp: buildPhktReviewLisp,
+  parseExtraction: parsePhktExtraction,
+  parseReviewResult: parsePhktReviewResult
+} = require('./phkt-placement-tool.cjs');
 let cachedAccoreConsolePath = null;
 const appRoot = path.resolve(__dirname, '..');
 const autocadToolsScriptPath = path.join(appRoot, 'autocad_tools.ps1');
@@ -16,6 +26,8 @@ const REMOVE_EXTRA_ROLES_COMMAND_NAME = 'FIBER_REMOVE_EXTRA_ROLES';
 const DRAW_ACCESSNET_WITHOUT_ADDRESS_COMMAND_NAME = 'FIBER_DRAW_ACCESSNET_WITHOUT_ADDRESS';
 const EXPORT_BORING_REFERENCES_COMMAND_NAME = 'FIBER_EXPORT_BORING_REFERENCES';
 const APPLY_BORING_RENAMES_COMMAND_NAME = 'FIBER_APPLY_BORING_RENAMES';
+const EXTRACT_PHKT_PLACEMENT_COMMAND_NAME = 'FIBER_EXTRACT_PHKT_PLACEMENT';
+const REVIEW_PHKT_PLACEMENT_COMMAND_NAME = 'FIBER_REVIEW_PHKT_PLACEMENT';
 const EXTRA_ROLE_BLOCK_NAME = 'ROL';
 const EXTRA_ROLE_CHECK_CODE = 'M-30173';
 const EXTRA_ROLE_TOLERANCE = 1;
@@ -1968,6 +1980,154 @@ async function tryRunCommandOnOpenDocument({
   };
 }
 
+async function placePhktTextsAtAccessnetVertices(projectFolderPath, options = {}) {
+  const dwgPath = await getFirstDwgPath(projectFolderPath);
+  if (!dwgPath) {
+    throw new Error('No se ha encontrado un DWG en la carpeta del proyecto.');
+  }
+
+  const token = `${path.basename(dwgPath).replace(/[^A-Za-z0-9._-]+/g, '_')}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const extractionLispPath = path.join(os.tmpdir(), `fiber-phkt-extract-${token}.lsp`);
+  const extractionOutputPath = path.join(os.tmpdir(), `fiber-phkt-extract-${token}.tsv`);
+  const extractionProgressPath = path.join(os.tmpdir(), `fiber-phkt-extract-${token}.progress`);
+  const reviewLispPath = path.join(os.tmpdir(), `fiber-phkt-review-${token}.lsp`);
+  const reviewOutputPath = path.join(os.tmpdir(), `fiber-phkt-review-${token}.tsv`);
+  const reviewProgressPath = path.join(os.tmpdir(), `fiber-phkt-review-${token}.progress`);
+  const temporaryPaths = [
+    extractionLispPath,
+    extractionOutputPath,
+    extractionProgressPath,
+    reviewLispPath,
+    reviewOutputPath,
+    reviewProgressPath
+  ];
+  const timeoutMs = Number(options.timeoutMs) || (4 * 60 * 60 * 1000);
+  const config = { ...DEFAULT_PHKT_PLACEMENT_CONFIG, ...(options.config ?? {}) };
+
+  try {
+    await Promise.all(temporaryPaths.map((targetPath) => removeFileIfExists(targetPath)));
+    await fsp.writeFile(extractionLispPath, buildPhktExtractionLisp({
+      outputFilePath: extractionOutputPath,
+      progressFilePath: extractionProgressPath,
+      commandName: EXTRACT_PHKT_PLACEMENT_COMMAND_NAME
+    }), 'utf8');
+
+    const extractionMonitor = startProgressMonitor(extractionProgressPath, {
+      onStage: (stage) => options.onStage?.(stage)
+    });
+    let extractionRun;
+    try {
+      extractionRun = await tryRunCommandOnOpenDocument({
+        dwgPath,
+        lispFilePath: extractionLispPath,
+        commandName: EXTRACT_PHKT_PLACEMENT_COMMAND_NAME,
+        progressFilePath: extractionProgressPath,
+        outputFilePath: extractionOutputPath,
+        timeoutMs,
+        saveDocument: false
+      });
+    }
+    finally {
+      await extractionMonitor.stop();
+    }
+
+    if (!extractionRun?.handled) {
+      throw new Error('Abra el DWG del proyecto en AutoCAD antes de iniciar la asignacion PHKT. Esta herramienta necesita una sesion interactiva.');
+    }
+    if (!(await pathExists(extractionOutputPath))) {
+      throw new Error('AutoCAD no ha generado la seleccion y geometria temporal para la asignacion PHKT.');
+    }
+
+    const extractionProgress = await fsp.readFile(extractionProgressPath, 'utf8').catch(() => '');
+    const extractionError = extractionProgress.match(/FMDB_RESULT:ERROR=([^\r\n]+)/i)?.[1];
+    if (extractionError) {
+      throw new Error(`AutoCAD no ha podido extraer la geometria PHKT: ${extractionError}`);
+    }
+    if (!/FMDB_DONE:(?:extracted|cancelled)/i.test(extractionProgress)) {
+      throw new Error('AutoCAD no ha finalizado correctamente la extraccion de textos y vertices PHKT.');
+    }
+
+    const extraction = parsePhktExtraction(await fsp.readFile(extractionOutputPath, 'utf8'));
+    if (extraction.texts.length === 0) {
+      return {
+        status: 'CANCELLED',
+        cancelled: true,
+        dwgPath,
+        selected: 0,
+        assigned: 0,
+        manual: 0,
+        skipped: 0,
+        withoutCandidates: 0,
+        errors: 0,
+        sharedVertices: 0,
+        maximumAssignments: 0,
+        config
+      };
+    }
+    if (extraction.vertices.length === 0) {
+      throw new Error('No se han encontrado vertices de Polyline en la layer Accessnet.');
+    }
+
+    const model = buildPlacementModel(extraction, config);
+    options.onModelReady?.({
+      textCount: model.texts.length,
+      rawVertexCount: extraction.vertices.length,
+      candidateCount: model.candidates.length,
+      rolCount: extraction.roles.length,
+      config
+    });
+    await fsp.writeFile(reviewLispPath, buildPhktReviewLisp({
+      model,
+      outputFilePath: reviewOutputPath,
+      progressFilePath: reviewProgressPath,
+      commandName: REVIEW_PHKT_PLACEMENT_COMMAND_NAME
+    }), 'utf8');
+
+    const reviewMonitor = startProgressMonitor(reviewProgressPath, {
+      onStage: (stage) => options.onStage?.(stage)
+    });
+    let reviewRun;
+    try {
+      reviewRun = await tryRunCommandOnOpenDocument({
+        dwgPath,
+        lispFilePath: reviewLispPath,
+        commandName: REVIEW_PHKT_PLACEMENT_COMMAND_NAME,
+        progressFilePath: reviewProgressPath,
+        outputFilePath: reviewOutputPath,
+        timeoutMs,
+        saveDocument: false
+      });
+    }
+    finally {
+      await reviewMonitor.stop();
+    }
+
+    if (!reviewRun?.handled || !(await pathExists(reviewOutputPath))) {
+      throw new Error('AutoCAD no ha completado la revision interactiva de textos PHKT.');
+    }
+
+    const result = parsePhktReviewResult(await fsp.readFile(reviewOutputPath, 'utf8'));
+    if (result.status === 'ROLLED_BACK') {
+      throw new Error(`Ha fallado un movimiento y se han revertido todos los cambios. ${result.error ?? ''}`.trim());
+    }
+    if (result.status === 'ERROR' || result.status === 'UNKNOWN') {
+      throw new Error(`AutoCAD no ha podido completar la revision PHKT. ${result.error ?? ''}`.trim());
+    }
+    return {
+      ...result,
+      cancelled: result.status !== 'APPLIED',
+      dwgPath,
+      config,
+      candidateCount: model.candidates.length,
+      rawVertexCount: extraction.vertices.length,
+      rolCount: extraction.roles.length
+    };
+  }
+  finally {
+    await Promise.all(temporaryPaths.map((targetPath) => removeFileIfExists(targetPath)));
+  }
+}
+
 async function tryPickPointOnOpenDocument({
   dwgPath,
   prompt,
@@ -2646,6 +2806,7 @@ module.exports = {
   extractCustomerTextCoordinates,
   extractOapCoordinate,
   getFirstDwgPath,
+  placePhktTextsAtAccessnetVertices,
   pickPointFromOpenDocument,
   removeExtraRolesFromCheck
 };

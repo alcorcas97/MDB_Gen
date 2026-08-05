@@ -1,6 +1,6 @@
 {
   "name": "fiber-mdb-generator",
-  "version": "1.1.80",
+  "version": "1.1.81",
   "description": "Desktop app to generate fiber delivery MDB databases from FC, BC, DWG and vergunning inputs.",
   "author": "OpenAI Codex",
   "repository": {
@@ -19,7 +19,8 @@
     "app:cr:package": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\package_cr_app.ps1",
     "app:package:portable": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\package_app.ps1 -Target portable",
     "app:package:installer": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\package_app.ps1 -Target nsis",
-    "app:package:all": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\package_app.ps1 -Target all"
+    "app:package:all": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\package_app.ps1 -Target all",
+    "test": "node --test test/*.test.cjs"
   },
   "dependencies": {
     "@mlightcad/libredwg-web": "^0.6.6",
@@ -50,6 +51,7 @@
       "!docs/**/*",
       "!app-cr/**/*",
       "!app/.playwright-cli/**/*",
+      "!test/**/*",
       "!tools/**/*",
       "!*.xlsx",
       "!*.csv",
