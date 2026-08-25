@@ -119,6 +119,29 @@ function Get-TopLevelExeArtifact {
     return $artifacts[0].FullName
 }
 
+function Get-Sha256Hash {
+    param([string]$Path)
+
+    $getFileHashCommand = Get-Command -Name Get-FileHash -ErrorAction SilentlyContinue
+    if ($null -ne $getFileHashCommand) {
+        return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+    }
+
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return -join ($sha256.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') })
+        }
+        finally {
+            $sha256.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
 function Invoke-BuildTarget {
     param(
         [string]$TargetName,
@@ -169,7 +192,7 @@ function Invoke-BuildTarget {
         throw "No se ha encontrado el ejecutable final de entrega en $deliveryExePath"
     }
 
-    $hash = (Get-FileHash -LiteralPath $deliveryExePath -Algorithm SHA256).Hash
+    $hash = Get-Sha256Hash -Path $deliveryExePath
     Set-Content -LiteralPath $deliveryHashPath -Value $hash -Encoding ASCII
     Set-Content -LiteralPath $deliveryReadmePath -Value (Get-DeliveryReadme $TargetName) -Encoding ASCII
 

@@ -30,6 +30,7 @@ const elements = {
   applyDempingContingencyButton: document.getElementById('applyDempingContingencyButton'),
   createGestuurdeBoringenButton: document.getElementById('createGestuurdeBoringenButton'),
   placePhktTextsButton: document.getElementById('placePhktTextsButton'),
+  placeRoutingPhktFromCheckButton: document.getElementById('placeRoutingPhktFromCheckButton'),
   getOapCoordinateButton: document.getElementById('getOapCoordinateButton'),
   cancelButton: document.getElementById('cancelButton'),
   openOutputButton: document.getElementById('openOutputButton'),
@@ -150,6 +151,7 @@ function setRunningState(running, cancelAvailable = false) {
     elements.reextractDpCoordinatesButton,
     elements.createGestuurdeBoringenButton,
     elements.placePhktTextsButton,
+    elements.placeRoutingPhktFromCheckButton,
     elements.removeExtraRolesButton,
     elements.drawAccessnetWithoutAddressButton,
     elements.applyDempingContingencyButton,
@@ -595,6 +597,19 @@ async function placePhktTexts() {
       ? 'Revision PHKT cancelada. No se ha movido ningun texto.'
       : `Asignacion PHKT completada. Seleccionados: ${result.selected}. Asignados: ${result.assigned}. Manuales: ${result.manual}. Omitidos: ${result.skipped}. Sin candidatos: ${result.withoutCandidates}. Vertices compartidos: ${result.sharedVertices}. Maximo en un vertice: ${result.maximumAssignments}.`,
     action: (payload) => fiberDesktopApi.placePhktTexts(payload)
+  });
+}
+
+async function placeRoutingPhktFromCheck() {
+  await runProjectTool({
+    startMessage: 'Leyendo Routing problem del check y preparando PHKT...',
+    successMessage: (result) => result.cancelled
+      ? 'PHKT routing check cancelado.'
+      : `PHKT routing check: ${result.assigned} textos movidos.`,
+    successLog: (result) => result.cancelled
+      ? `PHKT routing check cancelado usando ${result.checkPath}. Direcciones detectadas: ${result.routingProblemLabelCount}.`
+      : `PHKT routing check completado usando ${result.checkPath}. Direcciones detectadas: ${result.routingProblemLabelCount}. Textos revisados: ${result.selected}. Asignados: ${result.assigned}. Manuales: ${result.manual}. Omitidos: ${result.skipped}. Sin candidatos: ${result.withoutCandidates}.`,
+    action: (payload) => fiberDesktopApi.placeRoutingPhktFromCheck(payload)
   });
 }
 
@@ -1271,6 +1286,10 @@ elements.createGestuurdeBoringenButton.addEventListener('click', () => {
 
 elements.placePhktTextsButton.addEventListener('click', () => {
   void placePhktTexts();
+});
+
+elements.placeRoutingPhktFromCheckButton.addEventListener('click', () => {
+  void placeRoutingPhktFromCheck();
 });
 
 elements.removeExtraRolesButton.addEventListener('click', () => {

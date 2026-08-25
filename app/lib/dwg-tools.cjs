@@ -35,6 +35,8 @@ const ACCESSNET_WITHOUT_ADDRESS_CHECK_CODE = 'M-30001';
 const ACCESSNET_MARK_LAYER_NAME = 'FMDB_ACCESSNET_NO_ADDRESS';
 const ACCESSNET_MARK_COLOR = 1;
 const ACCESSNET_MARK_RADIUS = 1.5;
+const ROUTING_PROBLEM_SECTION_PATTERN = /routing\s+problem/i;
+const ROUTING_NO_NETWORK_MESSAGE_PATTERN = /no\s+network\s+connection\s+found\s+within\s+0\s*[,\.]\s*1\s*m\s+from\s+the\s+point/i;
 
 const CUSTOMER_LAYER_COLORS = new Map([
   ['ANDE', 3],
@@ -1832,6 +1834,92 @@ function decodeHtmlEntities(value) {
     .replace(/&#39;/gi, "'");
 }
 
+function stripHtmlToText(value) {
+  return decodeHtmlEntities(String(value ?? '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/tr>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/caption>/gi, '\n')
+    .replace(/<[^>]+>/g, ' '))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeCheckHeader(value) {
+  return stripHtmlToText(value).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function parseCheckTableRows(tableHtml) {
+  const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  const rows = [];
+  let trMatch;
+
+  while ((trMatch = trRegex.exec(String(tableHtml ?? ''))) !== null) {
+    const cellRegex = /<(?:th|td)[^>]*>([\s\S]*?)<\/(?:th|td)>/gi;
+    const cells = [];
+    let cellMatch;
+
+    while ((cellMatch = cellRegex.exec(trMatch[1])) !== null) {
+      cells.push(stripHtmlToText(cellMatch[1]));
+    }
+
+    if (cells.length > 0) {
+      rows.push(cells);
+    }
+  }
+
+  return rows;
+}
+
+function parseRoutingProblemLabelsFromCheckHtml(htmlText) {
+  const html = String(htmlText ?? '').replace(/\r/g, '');
+  const tableRegex = /<table\b[\s\S]*?<\/table>/gi;
+  const labels = [];
+  const seen = new Set();
+  let tableMatch;
+
+  while ((tableMatch = tableRegex.exec(html)) !== null) {
+    const tableHtml = tableMatch[0];
+    const tableContextHtml = html.slice(Math.max(0, tableMatch.index - 800), tableMatch.index) + tableHtml;
+    const tableContextText = stripHtmlToText(tableContextHtml);
+    if (!ROUTING_PROBLEM_SECTION_PATTERN.test(tableContextText)) {
+      continue;
+    }
+
+    const rows = parseCheckTableRows(tableHtml);
+    if (rows.length < 2) {
+      continue;
+    }
+
+    const headers = rows[0].map(normalizeCheckHeader);
+    const locationBIndex = headers.findIndex((header) => header === 'locatienaamb');
+    const errorMessageIndex = headers.findIndex((header) => header === 'errormessage');
+    if (locationBIndex < 0) {
+      continue;
+    }
+
+    for (const cells of rows.slice(1)) {
+      const errorMessage = stripHtmlToText(cells[errorMessageIndex] ?? '');
+      if (!ROUTING_NO_NETWORK_MESSAGE_PATTERN.test(errorMessage)) {
+        continue;
+      }
+
+      const label = normalizeText(cells[locationBIndex]);
+      if (!label) {
+        continue;
+      }
+
+      const key = label.toUpperCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        labels.push(label);
+      }
+    }
+  }
+
+  return labels;
+}
+
 function parseExtraRoleCoordinatesFromCheckHtml(htmlText) {
   const normalizedText = decodeHtmlEntities(String(htmlText ?? ''))
     .replace(/<br\s*\/?>/gi, '\n')
@@ -2009,7 +2097,8 @@ async function placePhktTextsAtAccessnetVertices(projectFolderPath, options = {}
     await fsp.writeFile(extractionLispPath, buildPhktExtractionLisp({
       outputFilePath: extractionOutputPath,
       progressFilePath: extractionProgressPath,
-      commandName: EXTRACT_PHKT_PLACEMENT_COMMAND_NAME
+      commandName: EXTRACT_PHKT_PLACEMENT_COMMAND_NAME,
+      targetLabels: options.targetLabels ?? []
     }), 'utf8');
 
     const extractionMonitor = startProgressMonitor(extractionProgressPath, {
@@ -2049,6 +2138,10 @@ async function placePhktTextsAtAccessnetVertices(projectFolderPath, options = {}
 
     const extraction = parsePhktExtraction(await fsp.readFile(extractionOutputPath, 'utf8'));
     if (extraction.texts.length === 0) {
+      if (Array.isArray(options.targetLabels) && options.targetLabels.length > 0) {
+        throw new Error(`No se ha encontrado ningun TEXT en el DWG que coincida con las ${options.targetLabels.length} direcciones del check.`);
+      }
+
       return {
         status: 'CANCELLED',
         cancelled: true,
@@ -2126,6 +2219,39 @@ async function placePhktTextsAtAccessnetVertices(projectFolderPath, options = {}
   finally {
     await Promise.all(temporaryPaths.map((targetPath) => removeFileIfExists(targetPath)));
   }
+}
+
+async function placeRoutingProblemPhktFromCheck(projectFolderPath, options = {}) {
+  if (typeof options.onStage === 'function') {
+    options.onStage('locate');
+  }
+
+  const checkPath = await findCheckHtmlPath(projectFolderPath);
+  if (!checkPath) {
+    throw new Error('No se ha encontrado ningun Checks.htm dentro de la carpeta del proyecto.');
+  }
+
+  if (typeof options.onStage === 'function') {
+    options.onStage('parse');
+  }
+
+  const htmlText = await fsp.readFile(checkPath, 'utf8');
+  const targetLabels = parseRoutingProblemLabelsFromCheckHtml(htmlText);
+  if (targetLabels.length === 0) {
+    throw new Error(`No se han encontrado direcciones locatienaam_b en la tabla cable: Routing problem de ${checkPath}.`);
+  }
+
+  const result = await placePhktTextsAtAccessnetVertices(projectFolderPath, {
+    ...options,
+    targetLabels
+  });
+
+  return {
+    ...result,
+    checkPath,
+    routingProblemLabelCount: targetLabels.length,
+    routingProblemLabels: targetLabels
+  };
 }
 
 async function tryPickPointOnOpenDocument({
@@ -2799,6 +2925,9 @@ async function drawAccessnetWithoutAddressFromCheck(projectFolderPath, options =
 
 module.exports = {
   CUSTOMER_LAYER_COLORS,
+  _internal: {
+    parseRoutingProblemLabelsFromCheckHtml
+  },
   drawAccessnetWithoutAddressFromCheck,
   clearCustomerCoordinatesInDwg,
   createGestuurdeBoringen,
@@ -2806,6 +2935,7 @@ module.exports = {
   extractCustomerTextCoordinates,
   extractOapCoordinate,
   getFirstDwgPath,
+  placeRoutingProblemPhktFromCheck,
   placePhktTextsAtAccessnetVertices,
   pickPointFromOpenDocument,
   removeExtraRolesFromCheck

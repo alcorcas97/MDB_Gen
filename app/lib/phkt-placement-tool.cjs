@@ -13,6 +13,15 @@ function pointToLisp(point) {
   return `(${Number(point.x)} ${Number(point.y)} ${Number(point.z ?? 0)})`;
 }
 
+function normalizeLabelForLisp(value) {
+  return String(value ?? '')
+    .replace(/[\u00A0\u202F]/g, ' ')
+    .replace(/[\u00AD\u200B\u200C\u200D\u2060\uFEFF]/g, '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^0-9A-Z]+/g, '');
+}
+
 function buildProgressHelpers(progressFilePath) {
   return `
 (setq fmdb-progress-file "${escapeLispString(toLispPath(progressFilePath))}")
@@ -30,10 +39,16 @@ function buildProgressHelpers(progressFilePath) {
 `;
 }
 
-function buildExtractionLisp({ outputFilePath, progressFilePath, commandName }) {
+function buildExtractionLisp({ outputFilePath, progressFilePath, commandName, targetLabels = [] }) {
+  const normalizedLabels = [...new Set((Array.isArray(targetLabels) ? targetLabels : [])
+    .map(normalizeLabelForLisp)
+    .filter(Boolean))];
+  const targetLabelsLisp = normalizedLabels.map((label) => `"${escapeLispString(label)}"`).join(' ');
+
   return `(vl-load-com)
 ${buildProgressHelpers(progressFilePath)}
 (setq fmdb-output-file "${escapeLispString(toLispPath(outputFilePath))}")
+(setq fmdb-target-labels '(${targetLabelsLisp}))
 
 (defun fmdb-point-list (value)
   (cond
@@ -46,6 +61,28 @@ ${buildProgressHelpers(progressFilePath)}
 
 (defun fmdb-safe-text (value)
   (vl-string-translate (strcat (chr 9) (chr 10) (chr 13)) "   " (if value value ""))
+)
+
+(defun fmdb-normalize-label (value / text index char code result)
+  (setq text (strcase (if value value ""))
+        index 1
+        result "")
+  (while (<= index (strlen text))
+    (setq char (substr text index 1) code (ascii char))
+    (if (or (and (>= code 48) (<= code 57)) (and (>= code 65) (<= code 90)))
+      (setq result (strcat result char)))
+    (setq index (1+ index)))
+  result
+)
+
+(defun fmdb-target-label-p (object / normalized)
+  (if (not fmdb-target-labels)
+    T
+    (progn
+      (setq normalized (fmdb-normalize-label (vla-get-TextString object)))
+      (if (member normalized fmdb-target-labels) T nil)
+    )
+  )
 )
 
 (defun fmdb-effective-name (object / result)
@@ -85,15 +122,20 @@ ${buildProgressHelpers(progressFilePath)}
 
 (defun fmdb-select-texts (/ result choice)
   (setq result nil choice nil)
-  (command "_.DELAY" 700)
-  (while (and (not result) (not (= choice "Cancelar")))
-    (prompt "\nSeleccione SOLO objetos TEXT PHKT y pulse Enter: ")
-    (setq result (ssget '((0 . "TEXT"))))
-    (if (not result)
-      (progn
-        (initget "Reintentar Cancelar")
-        (setq choice (getkword "\nNo se ha seleccionado ningun TEXT. [Reintentar/Cancelar] <Reintentar>: "))
-        (if (not choice) (setq choice "Reintentar"))
+  (if fmdb-target-labels
+    (setq result (ssget "_X" '((0 . "TEXT"))))
+    (progn
+      (command "_.DELAY" 700)
+      (while (and (not result) (not (= choice "Cancelar")))
+        (prompt "\nSeleccione SOLO objetos TEXT PHKT y pulse Enter: ")
+        (setq result (ssget '((0 . "TEXT"))))
+        (if (not result)
+          (progn
+            (initget "Reintentar Cancelar")
+            (setq choice (getkword "\nNo se ha seleccionado ningun TEXT. [Reintentar/Cancelar] <Reintentar>: "))
+            (if (not choice) (setq choice "Reintentar"))
+          )
+        )
       )
     )
   )
@@ -122,7 +164,7 @@ ${buildProgressHelpers(progressFilePath)}
             (setq entity (ssname selection index)
                   object (fmdb-vla-object entity)
                   point (if object (fmdb-logical-text-point object) nil))
-            (if (and object point)
+            (if (and object point (fmdb-target-label-p object))
               (progn
                 (fmdb-write-row stream (list "TEXT" (vla-get-Handle object) (vla-get-ObjectName object) (fmdb-safe-text (vla-get-TextString object))
                   (rtos (car point) 2 12) (rtos (cadr point) 2 12) (rtos (if (caddr point) (caddr point) 0.0) 2 12)))

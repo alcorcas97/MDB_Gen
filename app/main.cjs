@@ -3225,7 +3225,7 @@ ipcMain.handle('dwg:place-phkt-texts', async (_event, payload) => {
   sendGenerationEvent({
     type: 'log',
     level: 'info',
-    message: 'Iniciando asignacion PHKT. Durante la revision no se modificara ninguna entidad.\n'
+    message: 'Iniciando asignacion PHKT. Los textos aceptados se moveran en vivo durante la revision.\n'
   });
 
   const { placePhktTextsAtAccessnetVertices } = getDwgToolsModule();
@@ -3255,6 +3255,55 @@ ipcMain.handle('dwg:place-phkt-texts', async (_event, payload) => {
       ? 'Asignacion PHKT cancelada sin modificar el dibujo.'
       : `Asignacion PHKT completada: ${result.assigned} textos movidos.`
   });
+  return result;
+});
+
+ipcMain.handle('dwg:place-routing-phkt-from-check', async (_event, payload) => {
+  if (activeRun) {
+    throw new Error('Ya hay una operacion en curso.');
+  }
+
+  validateProjectAndMdbInput(payload);
+  sendGenerationEvent({
+    type: 'status',
+    message: 'Leyendo Routing problem del Checks.htm para preparar PHKT...'
+  });
+  sendGenerationEvent({
+    type: 'log',
+    level: 'info',
+    message: 'Buscando direcciones locatienaam_b en la tabla cable: Routing problem del check.\n'
+  });
+
+  const { placeRoutingProblemPhktFromCheck } = getDwgToolsModule();
+  const result = await placeRoutingProblemPhktFromCheck(payload.projectFolderPath, {
+    onStage: (stage) => {
+      const messages = {
+        locate: 'Buscando el fichero Checks.htm del proyecto...',
+        parse: 'Extrayendo direcciones locatienaam_b de Routing problem...',
+        'select-texts': 'Localizando automaticamente los TEXT indicados por el check...',
+        'extract-accessnet': 'Extrayendo vertices WCS de las polilineas Accessnet...',
+        'detect-rol': 'Detectando bloques ROL asociados a vertices...',
+        review: 'Revise cada texto desde la linea de comandos de AutoCAD.',
+        save: 'Guardando los movimientos PHKT aplicados...'
+      };
+      sendGenerationEvent({ type: 'status', message: messages[stage] ?? `PHKT routing check: ${stage}` });
+    },
+    onModelReady: ({ textCount, rawVertexCount, candidateCount, rolCount, config }) => {
+      sendGenerationEvent({
+        type: 'log',
+        level: 'info',
+        message: `Routing PHKT preparado: ${textCount} textos del check, ${rawVertexCount} vertices (${candidateCount} unicos), ${rolCount} bloques ROL. Radio: ${config.maxSearchRadius}; candidatos: ${config.maxCandidates}.\n`
+      });
+    }
+  });
+
+  sendGenerationEvent({
+    type: 'status',
+    message: result.cancelled
+      ? 'PHKT routing check cancelado.'
+      : `PHKT routing check completado: ${result.assigned} textos movidos.`
+  });
+
   return result;
 });
 
