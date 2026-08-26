@@ -2069,6 +2069,45 @@ function Clear-AccessTables {
 
     foreach ($tableName in $TableNames) {
         $Database.Execute("DELETE FROM [$tableName]")
+        Reset-AccessAutoNumber -Database $Database -TableName $tableName
+    }
+}
+
+function Reset-AccessAutoNumber {
+    param(
+        [__ComObject]$Database,
+        [string]$TableName
+    )
+
+    foreach ($field in $Database.TableDefs[$TableName].Fields) {
+        if (($field.Attributes -band 16) -ne 0) {
+            $Database.Execute("ALTER TABLE [$tableName] ALTER COLUMN [$($field.Name)] COUNTER (1, 1)")
+        }
+    }
+}
+
+function Compress-AccessDatabase {
+    param([string]$Path)
+
+    $resolvedPath = [System.IO.Path]::GetFullPath($Path)
+    $directory = [System.IO.Path]::GetDirectoryName($resolvedPath)
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($resolvedPath)
+    $compactPath = Join-Path $directory ('.{0}.{1}.compact.mdb' -f $baseName, [guid]::NewGuid().ToString('N'))
+    $backupPath = Join-Path $directory ('.{0}.{1}.backup.mdb' -f $baseName, [guid]::NewGuid().ToString('N'))
+    $engine = $null
+
+    try {
+        $engine = New-Object -ComObject DAO.DBEngine.120
+        $engine.CompactDatabase($resolvedPath, $compactPath)
+        [System.IO.File]::Replace($compactPath, $resolvedPath, $backupPath, $true)
+        Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
+    }
+    finally {
+        if ($null -ne $engine) {
+            [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($engine)
+        }
+        Remove-Item -LiteralPath $compactPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -2729,6 +2768,16 @@ function Export-CrossCheckData {
 }
 
 $context = Open-Database -Path $MdbPath
+$compactAfterClose = (
+    $context.Mode -eq 'Dao' -and
+    $Mode -in @(
+        'ImportCustomerCoordinates', 'ImportDpCoordinates', 'MoveResvCoordinatesToDp',
+        'SetOapCoordinate', 'FixCustomerDempingValues', 'ApplyDempingContingency',
+        'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh',
+        'ApplyGlaspoortProject', 'ApplyConnectionSync', 'ApplyRiserData',
+        'AddRiserData', 'DeleteRiserData', 'ApplyBuiseind'
+    )
+)
 
 try {
     switch ($Mode) {
@@ -2835,4 +2884,8 @@ try {
 }
 finally {
     Close-DatabaseContext -Context $context
+}
+
+if ($compactAfterClose) {
+    Compress-AccessDatabase -Path $MdbPath
 }
