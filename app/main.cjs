@@ -2613,6 +2613,14 @@ ipcMain.handle('mdb:update-fc', async (_event, payload) => {
       message: `FC rehecho en MDB. Klant rehechos: ${result.rebuiltCustomers}, con cambios en ${result.updatedCustomers} filas y ${result.updatedCustomerFields} campos. Kabel rehechos: ${result.rebuiltCables}, con cambios en ${result.updatedCables} filas y ${result.updatedCableFields} campos. Final: ${result.finalCustomers} clientes, ${result.finalCables} cables.\n`
     });
 
+    if ((result.preservedDrawingStatusCount ?? 0) > 0) {
+      sendGenerationEvent({
+        type: 'log',
+        level: 'info',
+        message: `Cambios manuales GL/EG conservados desde el dibujo: ${result.preservedDrawingStatusCount}.\n`
+      });
+    }
+
     const customerFieldChanges = Object.entries(result.customerFieldChanges ?? {});
     if (customerFieldChanges.length > 0) {
       sendGenerationEvent({

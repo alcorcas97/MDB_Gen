@@ -794,6 +794,14 @@ async function updateFc() {
       appendLog(`Campos cambiados en Kabel: ${cableFieldChanges.map(([name, count]) => `${name}=${count}`).join(', ')}.`, 'info');
     }
 
+    if (Array.isArray(result.preservedDrawingStatuses) && result.preservedDrawingStatuses.length > 0) {
+      appendLog(`Cambios manuales GL/EG conservados desde el dibujo: ${result.preservedDrawingStatuses.length}.`, 'info');
+      for (const override of result.preservedDrawingStatuses) {
+        const addressCode = override?.AddressCode ? ` [${override.AddressCode}]` : '';
+        appendLog(`- ${override?.CableId ?? 'sin cable'}${addressCode}: FC=${override?.FcValue ?? 'vacio'}, conservado=${override?.PreservedValue ?? 'vacio'}`, 'info');
+      }
+    }
+
     if (Array.isArray(result.warnings) && result.warnings.length > 0) {
       setStatus(`FC actualizado con ${result.warnings.length} cambios sensibles a revisar.`, 'warning');
       appendLog('Cambios sensibles GL/EG/RESV detectados:', 'warning');

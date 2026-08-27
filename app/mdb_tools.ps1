@@ -2527,6 +2527,7 @@ function Apply-FcRefresh {
     $updatedCables = 0
     $updatedCableFields = 0
     $statusChangeWarnings = [System.Collections.Generic.List[object]]::new()
+    $preservedDrawingStatuses = [System.Collections.Generic.List[object]]::new()
     $customerFieldChanges = @{}
     $cableFieldChanges = @{}
 
@@ -2540,6 +2541,32 @@ function Apply-FcRefresh {
         $key = Get-ConnectionSyncKey -TableName 'Klant' -Row $sourceRow
         $existingRow = if ($null -ne $key -and $existingCustomersByKey.ContainsKey($key)) { $existingCustomersByKey[$key] } else { $null }
         $mergedRow = Merge-FcRefreshRow -TableName 'Klant' -SourceRow $sourceRow -ExistingRow $existingRow
+        if ($null -ne $existingRow) {
+            $existingFtuLocation = Normalize-UpperStatus $existingRow.Kastnr
+            $sourceFtuLocation = Normalize-UpperStatus $sourceRow.Kastnr
+            $isDrawingStatusOverride = (
+                $existingFtuLocation -in @('GL', 'EG') -and
+                $sourceFtuLocation -in @('GL', 'EG') -and
+                $existingFtuLocation -ne $sourceFtuLocation
+            )
+
+            if ($isDrawingStatusOverride) {
+                $mergedRow.Kastnr = $existingFtuLocation
+                $addressCodeParts = @(@(
+                    (Normalize-Text $mergedRow.Postcode),
+                    (Normalize-Text $mergedRow.Huisnr),
+                    (Normalize-Text $mergedRow.Toevoeging),
+                    (Normalize-Text $mergedRow.KAMER)
+                ) | Where-Object { $null -ne $_ })
+
+                $preservedDrawingStatuses.Add([pscustomobject]@{
+                    CableId       = Normalize-Text $mergedRow.Kabel
+                    AddressCode   = if ($addressCodeParts.Count -gt 0) { ($addressCodeParts -join '-') } else { $null }
+                    FcValue       = $sourceFtuLocation
+                    PreservedValue = $existingFtuLocation
+                })
+            }
+        }
         $customerCableId = Normalize-Text $mergedRow.Kabel
         if ($null -ne $customerCableId -and $noDempingCableLookup.ContainsKey($customerCableId.ToUpperInvariant())) {
             foreach ($fieldName in @('Dempingswaarde1A', 'Dempingswaarde1Z', 'Dempingswaarde2A', 'Dempingswaarde2Z')) {
@@ -2643,6 +2670,8 @@ function Apply-FcRefresh {
         customerFieldChanges  = [pscustomobject]$customerFieldChanges
         cableFieldChanges     = [pscustomobject]$cableFieldChanges
         warnings              = @($statusChangeWarnings)
+        preservedDrawingStatusCount = $preservedDrawingStatuses.Count
+        preservedDrawingStatuses = @($preservedDrawingStatuses)
     }
 }
 
