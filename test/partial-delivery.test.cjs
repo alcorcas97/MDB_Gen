@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   buildNextPartialProjectName,
   parseSelectionText,
+  parseBcCsv,
   resolveSelectionIdentifiers
 } = require('../app/lib/partial-delivery.cjs');
 
@@ -15,6 +16,14 @@ const connections = [
 
 test('selection text accepts one identifier per line plus separators', () => {
   assert.deepEqual(parseSelectionText('\uFEFFK-ONE\r\n1000AA-2;K-ONE'), ['K-ONE', '1000AA-2']);
+});
+
+test('BC CSV maps address, Kabel ID and fiber position semantically', () => {
+  const rows = parseBcCsv('Postcode;Huisnummer;HuisnummerToevoeging;Opleverstatus;FTU-Type;KabelID;ODFpositie;StrengID\n1075VE;48;;2;FTU_TK01;ASD-GNA-DP102-KA01;49;DP102-5-1');
+  assert.deepEqual(rows[0], {
+    kabelId: 'K-ASD-GNA-DP102-KA01', phkt: '1075VE-48', postcode: '1075VE', houseNumber: '48', houseSuffix: null, room: null,
+    statusCode: '2', ftuType: 'FTU_TK01', dpLabel: 'ASD-GNA-DP102', odf: null, fiber: '49', strengId: 'DP102-5-1', buildingType: null
+  });
 });
 
 test('selection resolves Kabel ID or PHKT and expands a complex by default', () => {

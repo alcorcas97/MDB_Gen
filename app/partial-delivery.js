@@ -7,22 +7,23 @@ const elements = {
   availableCount: document.getElementById('availableCount'), selectedCount: document.getElementById('selectedCount'), complexCount: document.getElementById('complexCount'),
   expandComplexInput: document.getElementById('expandComplexInput'), searchInput: document.getElementById('searchInput'), searchResults: document.getElementById('searchResults'),
   manualInput: document.getElementById('manualInput'), addManualButton: document.getElementById('addManualButton'), importTxtButton: document.getElementById('importTxtButton'),
+  importBcButton: document.getElementById('importBcButton'),
   importSummary: document.getElementById('importSummary'), selectedRows: document.getElementById('selectedRows'), clearSelectionButton: document.getElementById('clearSelectionButton'),
   ftuTypeOptions: document.getElementById('ftuTypeOptions'), generateButton: document.getElementById('generateButton'), openOutputButton: document.getElementById('openOutputButton'), logOutput: document.getElementById('logOutput')
 };
 const state = { connections: [], selected: new Map(), loadedSource: '', running: false, lastOutput: null };
 
 function normalize(value) { return String(value ?? '').replace(/[\u00A0\u202F]/g, ' ').trim(); }
-function key(value) { return normalize(value).replace(/\s+/g, '').toUpperCase(); }
+function key(value) { return normalize(value).replace(/\s+/g, '').toUpperCase().replace(/^K-/, ''); }
 function basename(value) { const text = normalize(value); const index = Math.max(text.lastIndexOf('\\'), text.lastIndexOf('/')); return index >= 0 ? text.slice(index + 1) : text; }
 function dirname(value) { const text = normalize(value); const index = Math.max(text.lastIndexOf('\\'), text.lastIndexOf('/')); return index >= 0 ? text.slice(0, index) : ''; }
 function joinPath(parent, child) { return `${normalize(parent).replace(/[\\/]+$/, '')}\\${normalize(child).replace(/^[\\/]+/, '')}`; }
 function formatAddress(item) { return [item.postcode, item.houseNumber, item.houseSuffix, item.room].map(normalize).filter(Boolean).join('-') || normalize(item.phkt) || 'Sin dirección'; }
-function searchable(item) { return [item.kabelId, item.phkt, formatAddress(item), item.dpLabel, item.complex, item.kastnr].map(normalize).join(' ').toUpperCase(); }
+function searchable(item) { return [item.kabelId, item.phkt, formatAddress(item), item.dpLabel, item.complex, item.kastnr, item.bcFiber, item.strengId].map(normalize).join(' ').toUpperCase(); }
 function parseIdentifiers(text) { const seen = new Set(); return String(text ?? '').replace(/^\uFEFF/, '').split(/[\r\n;,]+/).map(normalize).filter((item) => { const id = key(item); if (!id || seen.has(id)) return false; seen.add(id); return true; }); }
 function setStatus(message, tone = 'neutral') { elements.statusBanner.textContent = message; elements.statusBanner.dataset.tone = tone; }
 function appendLog(message, tone = 'info') { for (const line of String(message ?? '').replace(/\r/g, '').split('\n').filter(Boolean)) { const row = document.createElement('div'); row.className = `log-line ${tone}`; row.textContent = `[${new Date().toLocaleTimeString('es-ES')}] ${line}`; elements.logOutput.append(row); } elements.logOutput.scrollTop = elements.logOutput.scrollHeight; }
-function setBusy(running) { state.running = running; for (const element of [elements.sourceProjectPath, elements.targetProjectPath, elements.backupFolderPath, elements.browseSourceButton, elements.browseTargetButton, elements.browseBackupButton, elements.reloadButton, elements.expandComplexInput, elements.searchInput, elements.manualInput, elements.addManualButton, elements.importTxtButton, elements.clearSelectionButton, elements.generateButton]) element.disabled = running; elements.openOutputButton.disabled = running || !state.lastOutput; }
+function setBusy(running) { state.running = running; for (const element of [elements.sourceProjectPath, elements.targetProjectPath, elements.backupFolderPath, elements.browseSourceButton, elements.browseTargetButton, elements.browseBackupButton, elements.reloadButton, elements.expandComplexInput, elements.searchInput, elements.manualInput, elements.addManualButton, elements.importTxtButton, elements.importBcButton, elements.clearSelectionButton, elements.generateButton]) element.disabled = running; elements.openOutputButton.disabled = running || !state.lastOutput; }
 
 function updateStats() {
   elements.availableCount.textContent = String(state.connections.length);
@@ -77,7 +78,25 @@ function renderSearchResults() {
   const query = normalize(elements.searchInput.value).toUpperCase();
   const matches = state.connections.filter((item) => !query || searchable(item).includes(query)).slice(0, 50);
   if (matches.length === 0) { elements.searchResults.innerHTML = '<div class="search-empty">No hay coincidencias.</div>'; return; }
-  elements.searchResults.innerHTML = matches.map((item) => `<button class="search-result" data-cable="${escapeHtml(item.kabelId)}" type="button"><strong>${escapeHtml(formatAddress(item))}</strong><span>${escapeHtml(item.kabelId)}</span><small>${escapeHtml(item.complex ?? item.dpLabel ?? '')}</small></button>`).join('');
+  elements.searchResults.innerHTML = matches.map((item) => `<button class="search-result" data-cable="${escapeHtml(item.kabelId)}" type="button"><strong>${escapeHtml(formatAddress(item))}</strong><span>${escapeHtml(item.kabelId)}${item.bcFiber ? ` · VZ${escapeHtml(item.bcFiber)}` : ''}${item.isNew ? ' · Nueva BC' : ''}</span><small>${escapeHtml(item.complex ?? item.dpLabel ?? '')}</small></button>`).join('');
+}
+
+function mergeBcRows(rows) {
+  let added = 0; let enriched = 0;
+  for (const row of rows ?? []) {
+    const existing = state.connections.find((item) => key(item.kabelId) === key(row.kabelId));
+    if (existing) {
+      existing.bcStatusCode = row.statusCode; existing.bcFiber = row.fiber; existing.bcOdf = row.odf; existing.bcStrengId = row.strengId;
+      if (!normalize(existing.ftuType)) existing.ftuType = row.ftuType;
+      enriched++;
+      continue;
+    }
+    state.connections.push({ ...row, kastnr: null, complex: null, isNew: true, bcStatusCode: row.statusCode, bcFiber: row.fiber, bcOdf: row.odf, bcStrengId: row.strengId });
+    added++;
+  }
+  state.connections.sort((a, b) => formatAddress(a).localeCompare(formatAddress(b), 'es', { numeric: true }));
+  renderFtuOptions(); renderSearchResults(); updateStats();
+  return { added, enriched };
 }
 
 async function loadProject() {
@@ -114,6 +133,17 @@ async function importTxt() {
   } catch (error) { appendLog(error instanceof Error ? error.message : String(error), 'error'); }
 }
 
+async function importBc() {
+  try {
+    const filePath = await api.openFile({ title: 'Selecciona el CSV de BC', filters: [{ name: 'CSV', extensions: ['csv'] }] });
+    if (!filePath) return;
+    const result = await api.readPartialDeliveryBc({ filePath });
+    const summary = mergeBcRows(result.rows);
+    elements.importSummary.textContent = `BC importado: ${result.rows.length} filas; ${summary.enriched} actualizadas y ${summary.added} conexiones nuevas disponibles.`;
+    appendLog(`BC importado: ${basename(filePath)}. Filas: ${result.rows.length}; nuevas: ${summary.added}.`, 'success');
+  } catch (error) { appendLog(error instanceof Error ? error.message : String(error), 'error'); }
+}
+
 async function generate() {
   if (state.selected.size === 0) { setStatus('Selecciona al menos una conexión.', 'warning'); return; }
   setBusy(true); state.lastOutput = null; setStatus('Generando Partial Delivery...', 'neutral');
@@ -129,7 +159,9 @@ async function generate() {
         demping1A: item.demping1A === '' || item.demping1A === null || item.demping1A === undefined ? null : Number(item.demping1A),
         demping1Z: item.demping1Z === '' || item.demping1Z === null || item.demping1Z === undefined ? null : Number(item.demping1Z),
         demping2A: item.demping2A === '' || item.demping2A === null || item.demping2A === undefined ? null : Number(item.demping2A),
-        demping2Z: item.demping2Z === '' || item.demping2Z === null || item.demping2Z === undefined ? null : Number(item.demping2Z)
+        demping2Z: item.demping2Z === '' || item.demping2Z === null || item.demping2Z === undefined ? null : Number(item.demping2Z),
+        postcode: item.postcode, houseNumber: item.houseNumber, houseSuffix: item.houseSuffix, room: item.room,
+        complex: item.complex, dpLabel: item.dpLabel, statusCode: item.bcStatusCode, fiber: item.bcFiber
       }))
     });
     state.lastOutput = result.targetProjectPath;
@@ -154,6 +186,7 @@ elements.searchInput.addEventListener('input', renderSearchResults);
 elements.searchResults.addEventListener('click', (event) => { const button = event.target.closest('[data-cable]'); if (!button) return; const item = state.connections.find((connection) => key(connection.kabelId) === key(button.dataset.cable)); if (item) addConnections([item]); });
 elements.addManualButton.addEventListener('click', () => addIdentifiers(elements.manualInput.value));
 elements.importTxtButton.addEventListener('click', () => void importTxt());
+elements.importBcButton.addEventListener('click', () => void importBc());
 elements.selectedRows.addEventListener('click', (event) => { const button = event.target.closest('.remove-connection'); if (!button) return; state.selected.delete(key(button.dataset.cable)); renderSelected(); });
 elements.selectedRows.addEventListener('input', (event) => {
   const input = event.target.closest('.connection-edit'); const row = event.target.closest('[data-connection]');

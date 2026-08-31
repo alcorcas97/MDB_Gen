@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('fiberApp', {
   openPartialDeliveryWindow: (payload) => ipcRenderer.invoke('partial-delivery:open-window', payload),
   loadPartialDeliveryProject: (payload) => ipcRenderer.invoke('partial-delivery:load-project', payload),
   readPartialDeliveryList: (payload) => ipcRenderer.invoke('partial-delivery:read-list', payload),
+  readPartialDeliveryBc: (payload) => ipcRenderer.invoke('partial-delivery:read-bc', payload),
   generatePartialDelivery: (payload) => ipcRenderer.invoke('partial-delivery:generate', payload),
   openRiserWindow: (payload) => ipcRenderer.invoke('riser:open-window', payload),
   loadRiserData: (payload) => ipcRenderer.invoke('riser:load-data', payload),

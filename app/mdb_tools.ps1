@@ -2876,13 +2876,13 @@ function Apply-PartialDelivery {
     if ($selection.PSObject.Properties.Name -contains 'connections') {
         $connectionEdits = @($selection.connections)
     }
-    $requestedCableIds = if ($connectionEdits.Count -gt 0) {
+    $requestedCableIds = if (@($connectionEdits).Count -gt 0) {
         @($connectionEdits | ForEach-Object { Normalize-Text $_.kabelId } | Where-Object { $null -ne $_ })
     }
     else {
         @($selection.cableIds | ForEach-Object { Normalize-Text $_ } | Where-Object { $null -ne $_ })
     }
-    if ($requestedCableIds.Count -eq 0) {
+    if (@($requestedCableIds).Count -eq 0) {
         throw 'No hay conexiones seleccionadas para el Partial Delivery.'
     }
 
@@ -2902,11 +2902,56 @@ function Apply-PartialDelivery {
         $cableId = Normalize-Text $_.Kabel
         $null -ne $cableId -and $requestedSet.ContainsKey($cableId.ToUpperInvariant())
     } | Sort-Object ID)
-    if ($selectedCustomers.Count -ne $requestedSet.Count) {
-        $found = @{}
-        foreach ($row in $selectedCustomers) { $found[(Normalize-Text $row.Kabel).ToUpperInvariant()] = $true }
-        $missing = @($requestedSet.Keys | Where-Object { -not $found.ContainsKey($_) } | Sort-Object)
-        throw "No se han encontrado todas las conexiones en Klant: $($missing -join ', ')."
+    $found = @{}
+    foreach ($row in $selectedCustomers) { $found[(Normalize-Text $row.Kabel).ToUpperInvariant()] = $true }
+    $newConnectionCount = 0
+    $newTopologyWarnings = @()
+    foreach ($missingKey in @($requestedSet.Keys | Where-Object { -not $found.ContainsKey($_) })) {
+        $edit = @($connectionEdits | Where-Object { (Normalize-Text $_.kabelId).ToUpperInvariant() -eq $missingKey } | Select-Object -First 1)
+        if (@($edit).Count -eq 0) { throw "La conexion $missingKey no existe en el MDB y no trae datos BC para crearla." }
+        $edit = @($edit)[0]
+        $newCableId = Normalize-Text $edit.kabelId
+        $newDp = Normalize-Text $edit.dpLabel
+        if ($null -eq $newDp) {
+            $dpMatch = [regex]::Match($newCableId, '^(?:K-)?(.+?-DP\d+)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            if ($dpMatch.Success) { $newDp = $dpMatch.Groups[1].Value }
+        }
+        if ($null -eq $newDp) { throw "La conexion nueva $newCableId no tiene DP identificable en el BC." }
+        $newStatus = Normalize-UpperStatus $edit.status
+        if ($null -eq $newStatus) { $newStatus = Resolve-StatusLocation -DeliveryStatus (Normalize-Text $edit.statusCode) -CurrentLocation $null -PreferredLocation $null }
+        $newHouseNumber = 0
+        $houseNumberText = Normalize-Text $edit.houseNumber
+        if ($null -ne $houseNumberText) { [void][int]::TryParse($houseNumberText, [ref]$newHouseNumber) }
+        $newAddressParts = @((Normalize-Text $edit.postcode), (Normalize-Text $edit.houseNumber), (Normalize-Text $edit.houseSuffix)) | Where-Object { $null -ne $_ }
+        $newAddress = ($newAddressParts -join '-').ToUpperInvariant()
+        $newCustomer = [pscustomobject]@{
+            ID = 0; Postcode = Normalize-Text $edit.postcode; Huisnr = $newHouseNumber; Toevoeging = Normalize-Text $edit.houseSuffix;
+            Kastnr = $newStatus; FTUType = Normalize-Text $edit.ftuType; Kabel = $newCableId; VEZELNR1 = 1;
+            Dempingswaarde1A = Convert-ToNullableDouble $edit.demping1A; Specificatie1A = $null; Dempingswaarde1Z = Convert-ToNullableDouble $edit.demping1Z;
+            Specificatie1Z = $null; Vezelnr2 = $null; Dempingswaarde2A = Convert-ToNullableDouble $edit.demping2A; Specificatie2A = $null;
+            Dempingswaarde2Z = Convert-ToNullableDouble $edit.demping2Z; Specificatie2Z = $null; X = 0; Y = 0; ImportResult = $null;
+            COMPLEX = Normalize-Text $edit.complex; KAMER = Normalize-Text $edit.room; ALIASNAAM = $null; FTU_SERIENUMMER = $null
+        }
+        $newCable = [pscustomobject]@{
+            ID = 0; Label = $newCableId; Kabeltype = '2V_DBC_PR01'; Locatienaam_A = $newDp; Afwerkeenheid_A = $newDp;
+            PoortA = $null; Locatienaam_B = $newAddress; Afwerkeenheid_B = if ((Normalize-Text $edit.statusCode) -eq '2') { $newStatus } else { $null };
+            PoortB = $null; Serienummer = $null; ImportResult = $null; CATEGORIE = $null
+        }
+        $selectedCustomers += $newCustomer
+        $allCables += $newCable
+        $newConnectionCount++
+        $templateCable = @($allCables | Where-Object { $location = Normalize-Text $_.Locatienaam_A; $label = Normalize-Text $_.Label; $null -ne $location -and $null -ne $label -and $location.ToUpperInvariant() -eq $newDp.ToUpperInvariant() -and $label.ToUpperInvariant() -ne $newCableId.ToUpperInvariant() } | Select-Object -First 1)
+        $templateLas = if (@($templateCable).Count -gt 0) { @($allLas | Where-Object { $cableB = Normalize-Text $_.KabelB; $null -ne $cableB -and $cableB.ToUpperInvariant() -eq (Normalize-Text @($templateCable)[0].Label).ToUpperInvariant() } | Select-Object -First 1) } else { @() }
+        if (@($templateLas).Count -gt 0) {
+            $clone = [ordered]@{}
+            foreach ($property in $templateLas[0].PSObject.Properties) { $clone[$property.Name] = $property.Value }
+            $clone.KabelB = $newCableId; $clone.VezelnrB = 1
+            if ($edit.PSObject.Properties.Name -contains 'fiber' -and (Normalize-Text $edit.fiber)) { $clone.VezelnrA = [int]$edit.fiber }
+            $allLas += [pscustomobject]$clone
+        }
+        else {
+            $newTopologyWarnings += $newCableId
+        }
     }
 
     $editLookup = @{}
@@ -2974,7 +3019,7 @@ function Apply-PartialDelivery {
 
     $emailSetting = @($allSettings | Where-Object { (Normalize-Text $_.NAAM) -eq 'email' } | Select-Object -First 1)
     $targetSettings = @()
-    if ($emailSetting.Count -gt 0) {
+    if (@($emailSetting).Count -gt 0) {
         $targetSettings += [pscustomobject]@{ NAAM = 'email'; WAARDE = Normalize-Text $emailSetting[0].WAARDE }
     }
     $targetSettings += [pscustomobject]@{ NAAM = 'Dataset'; WAARDE = 'PARTIAL' }
@@ -2995,20 +3040,22 @@ function Apply-PartialDelivery {
     $idChecks = @('Instellingen', 'Accesspoint', 'SpliceBox', 'Kabel', 'Klant', 'Las') |
         ForEach-Object { Test-ContiguousTableIds -Database $Database -TableName $_ }
     $failedIdChecks = @($idChecks | Where-Object { -not $_.contiguousFromOne })
-    if ($failedIdChecks.Count -gt 0) {
+    if (@($failedIdChecks).Count -gt 0) {
         throw "Las IDs no son consecutivas desde 1 en: $(@($failedIdChecks.table) -join ', ')."
     }
 
     return [pscustomobject]@{
-        customers = $selectedCustomers.Count
-        customerCables = $customerCables.Count
-        feederCables = $feederCables.Count
-        cables = $targetCables.Count
-        las = $targetLas.Count
-        accesspoints = $targetAccesspoints.Count
-        spliceBoxes = $targetSpliceBoxes.Count
+        customers = @($selectedCustomers).Count
+        customerCables = @($customerCables).Count
+        feederCables = @($feederCables).Count
+        cables = @($targetCables).Count
+        las = @($targetLas).Count
+        accesspoints = @($targetAccesspoints).Count
+        spliceBoxes = @($targetSpliceBoxes).Count
         dpLabels = @($dpSet.Values | Sort-Object)
         complexes = @($selectedCustomers | ForEach-Object { Normalize-Text $_.COMPLEX } | Where-Object { $null -ne $_ } | Sort-Object -Unique)
+        newConnections = $newConnectionCount
+        newTopologyWarnings = @($newTopologyWarnings)
         idChecks = $idChecks
     }
 }

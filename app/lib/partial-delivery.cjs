@@ -1,4 +1,5 @@
 const path = require('node:path');
+const { parse } = require('csv-parse/sync');
 
 function normalizeText(value) {
   const text = String(value ?? '')
@@ -24,6 +25,39 @@ function parseSelectionText(value) {
       seen.add(key);
       return true;
     });
+}
+
+function parseBcCsv(value) {
+  const rows = parse(String(value ?? '').replace(/^\uFEFF/, ''), {
+    delimiter: ';', columns: true, skip_empty_lines: true, bom: true, relax_column_count: true, trim: true
+  });
+  return rows.map((row) => {
+    const get = (...names) => {
+      for (const name of names) {
+        const value = row[name];
+        if (normalizeText(value)) return normalizeText(value);
+      }
+      return null;
+    };
+    const rawCableId = get('KabelID', 'Kabel ID');
+    const kabelId = rawCableId && /^K-/i.test(rawCableId) ? `K-${rawCableId.slice(2)}` : rawCableId ? `K-${rawCableId}` : null;
+    const postcode = get('Postcode');
+    const houseNumber = get('Huisnummer');
+    const houseSuffix = get('HuisnummerToevoeging', 'Huisnummer Toevoeging');
+    const room = get('Kamer');
+    const phkt = [postcode, houseNumber, houseSuffix, room].filter(Boolean).join('-');
+    const dpMatch = kabelId?.match(/^(?:K-)?(.+?-DP\d+)/i);
+    return {
+      kabelId, phkt, postcode, houseNumber, houseSuffix, room,
+      statusCode: get('Opleverstatus', 'Opleverstatus KPN'),
+      ftuType: get('FTU-Type'),
+      dpLabel: dpMatch ? dpMatch[1] : null,
+      odf: get('ODF'),
+      fiber: get('ODFpositie', 'ODF Positie'),
+      strengId: get('StrengID'),
+      buildingType: get('Gebouwtype', 'Gebouwtype hoog laag etc')
+    };
+  }).filter((row) => row.kabelId);
 }
 
 function getConnectionSearchText(connection) {
@@ -107,5 +141,6 @@ module.exports = {
   normalizeIdentifier,
   normalizeText,
   parseSelectionText,
+  parseBcCsv,
   resolveSelectionIdentifiers
 };
