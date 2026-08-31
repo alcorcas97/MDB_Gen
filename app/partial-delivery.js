@@ -161,7 +161,8 @@ async function generate() {
         demping2A: item.demping2A === '' || item.demping2A === null || item.demping2A === undefined ? null : Number(item.demping2A),
         demping2Z: item.demping2Z === '' || item.demping2Z === null || item.demping2Z === undefined ? null : Number(item.demping2Z),
         postcode: item.postcode, houseNumber: item.houseNumber, houseSuffix: item.houseSuffix, room: item.room,
-        complex: item.complex, dpLabel: item.dpLabel, statusCode: item.bcStatusCode, fiber: item.bcFiber
+        complex: item.complex, dpLabel: item.dpLabel, statusCode: item.bcStatusCode,
+        fiber: item.bcFiber, odf: item.bcOdf, strengId: item.bcStrengId, buildingType: item.buildingType
       }))
     });
     state.lastOutput = result.targetProjectPath;

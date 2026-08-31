@@ -2940,14 +2940,36 @@ function Apply-PartialDelivery {
         $selectedCustomers += $newCustomer
         $allCables += $newCable
         $newConnectionCount++
+        $requestedFiber = 0
+        $fiberText = Normalize-Text $edit.fiber
+        if ($null -ne $fiberText) { [void][int]::TryParse($fiberText, [ref]$requestedFiber) }
         $templateCable = @($allCables | Where-Object { $location = Normalize-Text $_.Locatienaam_A; $label = Normalize-Text $_.Label; $null -ne $location -and $null -ne $label -and $location.ToUpperInvariant() -eq $newDp.ToUpperInvariant() -and $label.ToUpperInvariant() -ne $newCableId.ToUpperInvariant() } | Select-Object -First 1)
-        $templateLas = if (@($templateCable).Count -gt 0) { @($allLas | Where-Object { $cableB = Normalize-Text $_.KabelB; $null -ne $cableB -and $cableB.ToUpperInvariant() -eq (Normalize-Text @($templateCable)[0].Label).ToUpperInvariant() } | Select-Object -First 1) } else { @() }
-        if (@($templateLas).Count -gt 0) {
+        $templateLas = if (@($templateCable).Count -gt 0) { @($allLas | Where-Object { $cableB = Normalize-Text $_.KabelB; $null -ne $cableB -and $cableB.ToUpperInvariant() -eq (Normalize-Text @($templateCable)[0].Label).ToUpperInvariant() } | Sort-Object VezelnrB) } else { @() }
+        # Prefer the accepted LAS topology for this exact BC fibre.  This keeps
+        # cassette/position/cable-A consistent with the full project instead of
+        # blindly cloning an unrelated customer in the same DP.
+        $exactLas = if ($requestedFiber -gt 0) {
+            @($allLas | Where-Object {
+                $location = Normalize-Text $_.LOCATIE
+                $cableA = Normalize-Text $_.KabelA
+                $fiberA = 0; [void][int]::TryParse((Normalize-Text $_.VezelnrA), [ref]$fiberA)
+                $null -ne $location -and $location.ToUpperInvariant() -eq $newDp.ToUpperInvariant() -and $null -ne $cableA -and $fiberA -eq $requestedFiber
+            } | Select-Object -First 1)
+        } else { @() }
+        $spliceTemplate = if (@($exactLas).Count -gt 0) { $exactLas[0] } elseif (@($templateLas).Count -gt 0) { $templateLas | Where-Object { (Normalize-Text $_.VezelnrB) -eq '1' } | Select-Object -First 1 } else { $null }
+        if ($null -ne $spliceTemplate) {
             $clone = [ordered]@{}
-            foreach ($property in $templateLas[0].PSObject.Properties) { $clone[$property.Name] = $property.Value }
+            foreach ($property in $spliceTemplate.PSObject.Properties) { $clone[$property.Name] = $property.Value }
             $clone.KabelB = $newCableId; $clone.VezelnrB = 1
-            if ($edit.PSObject.Properties.Name -contains 'fiber' -and (Normalize-Text $edit.fiber)) { $clone.VezelnrA = [int]$edit.fiber }
+            if ($requestedFiber -gt 0) { $clone.VezelnrA = $requestedFiber }
             $allLas += [pscustomobject]$clone
+            $parkingTemplate = @($templateLas | Where-Object { (Normalize-Text $_.VezelnrB) -eq '2' } | Select-Object -First 1)
+            if (@($parkingTemplate).Count -gt 0) {
+                $parkingClone = [ordered]@{}
+                foreach ($property in $parkingTemplate[0].PSObject.Properties) { $parkingClone[$property.Name] = $property.Value }
+                $parkingClone.KabelB = $newCableId; $parkingClone.VezelnrB = 2
+                $allLas += [pscustomobject]$parkingClone
+            }
         }
         else {
             $newTopologyWarnings += $newCableId
@@ -2973,6 +2995,33 @@ function Apply-PartialDelivery {
         )) {
             if ($edit.PSObject.Properties.Name -contains $mapping.Json) {
                 $customer.($mapping.Field) = Convert-ToNullableDouble $edit.($mapping.Json)
+            }
+        }
+    }
+
+    # Reconcile LAS rows for every selected BC record.  The accepted project is
+    # the source of topology, while BC is authoritative for the customer fibre.
+    foreach ($edit in $connectionEdits) {
+        $editCableId = Normalize-Text $edit.kabelId
+        $fiberText = Normalize-Text $edit.fiber
+        $fiber = 0
+        if ($null -eq $editCableId -or $null -eq $fiberText -or -not [int]::TryParse($fiberText, [ref]$fiber) -or $fiber -le 0) { continue }
+        $lasRows = @($allLas | Where-Object { $cableB = Normalize-Text $_.KabelB; $null -ne $cableB -and $cableB.ToUpperInvariant() -eq $editCableId.ToUpperInvariant() -and (Normalize-Text $_.VezelnrB) -eq '1' })
+        foreach ($las in $lasRows) {
+            $las.VezelnrA = $fiber
+            $dp = Normalize-Text $las.LOCATIE
+            $source = @($allLas | Where-Object {
+                $sourceDp = Normalize-Text $_.LOCATIE; $sourceCableA = Normalize-Text $_.KabelA; $sourceFiber = 0
+                [void][int]::TryParse((Normalize-Text $_.VezelnrA), [ref]$sourceFiber)
+                $sourceDp -and $sourceCableA -and $sourceDp.ToUpperInvariant() -eq $dp.ToUpperInvariant() -and $sourceFiber -eq $fiber
+            } | Select-Object -First 1)
+            if (@($source).Count -gt 0) {
+                $las.KabelA = $source[0].KabelA
+                $las.Cassette = $source[0].Cassette
+                $las.Positienr = $source[0].Positienr
+                $las.CassetteType = $source[0].CassetteType
+                $las.zijde_fasplaat = $source[0].zijde_fasplaat
+                $las.Gelast = 'j'
             }
         }
     }
