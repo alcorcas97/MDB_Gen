@@ -33,6 +33,8 @@ const elements = {
   placePhktTextsButton: document.getElementById('placePhktTextsButton'),
   placeRoutingPhktFromCheckButton: document.getElementById('placeRoutingPhktFromCheckButton'),
   getOapCoordinateButton: document.getElementById('getOapCoordinateButton'),
+  uppercaseOapInput: document.getElementById('uppercaseOapInput'),
+  uppercaseOapButton: document.getElementById('uppercaseOapButton'),
   cancelButton: document.getElementById('cancelButton'),
   openOutputButton: document.getElementById('openOutputButton'),
   clearLogButton: document.getElementById('clearLogButton'),
@@ -157,7 +159,8 @@ function setRunningState(running, cancelAvailable = false) {
     elements.removeExtraRolesButton,
     elements.drawAccessnetWithoutAddressButton,
     elements.applyDempingContingencyButton,
-    elements.getOapCoordinateButton
+    elements.getOapCoordinateButton,
+    elements.uppercaseOapButton
   ]) {
     control.disabled = running;
   }
@@ -167,7 +170,8 @@ function setRunningState(running, cancelAvailable = false) {
     elements.fcPath,
     elements.bcPath,
     elements.projectFolderPath,
-    elements.outputPath
+    elements.outputPath,
+    elements.uppercaseOapInput
   ]) {
     input.disabled = running;
   }
@@ -558,7 +562,8 @@ async function generateMdb() {
       fcPath: elements.fcPath.value.trim(),
       bcPath: elements.bcPath.value.trim(),
       projectFolderPath: elements.projectFolderPath.value.trim(),
-      outputPath: elements.outputPath.value.trim()
+      outputPath: elements.outputPath.value.trim(),
+      uppercaseOap: elements.uppercaseOapInput.checked
     });
 
     state.lastOutputPath = result.outputPath;
@@ -1142,6 +1147,15 @@ async function getOapCoordinate() {
   });
 }
 
+async function uppercaseOap() {
+  await runProjectTool({
+    startMessage: 'Mayusculizando el prefijo OAP del proyecto...',
+    successMessage: (result) => `OAP corregido: ${result.projectLabel} -> ${result.uppercaseProjectLabel}.`,
+    successLog: (result) => `Corrección OAP completada en el MDB. Campos revisados: ${result.fieldsScanned}.`,
+    action: (payload) => fiberDesktopApi.uppercaseOap(payload)
+  });
+}
+
 async function createGestuurdeBoringen() {
   await runProjectTool({
     startMessage: 'Creando gestuurde boringen desde DWG y carpeta Boringen...',
@@ -1335,6 +1349,7 @@ elements.applyDempingContingencyButton.addEventListener('click', () => {
 elements.getOapCoordinateButton.addEventListener('click', () => {
   void getOapCoordinate();
 });
+elements.uppercaseOapButton.addEventListener('click', () => { void uppercaseOap(); });
 
   elements.cancelButton.addEventListener('click', async () => {
     setStatus('Cancelando generación...', 'warning');

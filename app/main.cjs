@@ -2012,7 +2012,7 @@ function runPowerShellScript(scriptArgs) {
 }
 
 function runGeneratorWithPowerShell(payload, metadataPath) {
-  return runPowerShellScript([
+  const args = [
     '-TemplatePath',
     payload.templatePath,
     '-FcPath',
@@ -2025,7 +2025,9 @@ function runGeneratorWithPowerShell(payload, metadataPath) {
     payload.projectFolderPath,
     '-MetadataPath',
     metadataPath
-  ]);
+  ];
+  if (payload.uppercaseOap) args.push('-UppercaseOap');
+  return runPowerShellScript(args);
 }
 
 async function runPowerShellJson(scriptPath, scriptArgs) {
@@ -4152,6 +4154,15 @@ ipcMain.handle('dwg:get-oap-coordinate', async (_event, payload) => {
     nearestHuisnr: updateResult.nearestHuisnr,
     nearestToevoeging: updateResult.nearestToevoeging
   };
+});
+
+ipcMain.handle('mdb:uppercase-oap', async (_event, payload) => {
+  if (activeRun) throw new Error('Ya hay una operacion en curso.');
+  validateProjectAndMdbInput(payload);
+  const workingMdbPath = await resolveProjectWorkingMdbPath(payload.projectFolderPath);
+  const result = await runMdbToolsJson(['-Mode', 'UppercaseOap', '-MdbPath', workingMdbPath]);
+  sendGenerationEvent({ type: 'log', level: 'info', message: `OAP mayusculizado en ${workingMdbPath}: ${result.projectLabel} -> ${result.uppercaseProjectLabel}.\n` });
+  return { mdbPath: workingMdbPath, ...result };
 });
 
 ipcMain.handle('dwg:pick-riser-et-coordinate', async (_event, payload) => {

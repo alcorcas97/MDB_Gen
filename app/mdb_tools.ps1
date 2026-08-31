@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('ExportCustomerDrawData', 'ImportCustomerCoordinates', 'ExportDpCoordinateTargets', 'ImportDpCoordinates', 'MoveResvCoordinatesToDp', 'SetOapCoordinate', 'ExportCrossCheckData', 'FixCustomerDempingValues', 'ApplyDempingContingency', 'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh', 'ApplyGlaspoortProject', 'InspectConnectionBalance', 'ApplyConnectionSync', 'ExportRiserState', 'ApplyRiserData', 'AddRiserData', 'DeleteRiserData', 'ApplyBuiseind', 'ExportPartialDeliveryData', 'ApplyPartialDelivery')]
+    [ValidateSet('ExportCustomerDrawData', 'ImportCustomerCoordinates', 'ExportDpCoordinateTargets', 'ImportDpCoordinates', 'MoveResvCoordinatesToDp', 'SetOapCoordinate', 'UppercaseOap', 'ExportCrossCheckData', 'FixCustomerDempingValues', 'ApplyDempingContingency', 'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh', 'ApplyGlaspoortProject', 'InspectConnectionBalance', 'ApplyConnectionSync', 'ExportRiserState', 'ApplyRiserData', 'AddRiserData', 'DeleteRiserData', 'ApplyBuiseind', 'ExportPartialDeliveryData', 'ApplyPartialDelivery')]
     [string]$Mode,
 
     [Parameter(Mandatory = $true)]
@@ -2796,6 +2796,39 @@ function Export-CrossCheckData {
     }
 }
 
+function Uppercase-OapLabels {
+    param([__ComObject]$Database)
+
+    $projectLabel = Get-ProjectLabelFromDatabase -Database $Database
+    if ($null -eq $projectLabel) { throw 'No se ha podido resolver el OAP/proyecto desde la tabla POP.' }
+    $upperLabel = $projectLabel.ToUpperInvariant()
+    $updatedFields = 0
+    $tableDefs = $Database.TableDefs
+    for ($tableIndex = 0; $tableIndex -lt $tableDefs.Count; $tableIndex++) {
+        $tableDef = $tableDefs.Item($tableIndex)
+        try {
+            $tableName = Normalize-Text $tableDef.Name
+            if ($null -eq $tableName -or $tableName.StartsWith('MSys', [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+            $fields = $tableDef.Fields
+            for ($fieldIndex = 0; $fieldIndex -lt $fields.Count; $fieldIndex++) {
+                $field = $fields.Item($fieldIndex)
+                try {
+                    if ($field.Type -notin @(10, 12)) { continue }
+                    $fieldName = Normalize-Text $field.Name
+                    $oldLiteral = Convert-ToAccessTextLiteral $projectLabel
+                    $newLiteral = Convert-ToAccessTextLiteral $upperLabel
+                    $sql = "UPDATE [$tableName] SET [$fieldName] = Replace([$fieldName], $oldLiteral, $newLiteral, 1, -1, 1) WHERE [$fieldName] Is Not Null"
+                    $Database.Execute($sql)
+                    $updatedFields++
+                }
+                finally { [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($field) }
+            }
+        }
+        finally { [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($tableDef) }
+    }
+    return [pscustomobject]@{ projectLabel = $projectLabel; uppercaseProjectLabel = $upperLabel; fieldsScanned = $updatedFields }
+}
+
 function Export-PartialDeliveryData {
     param([__ComObject]$Database)
 
@@ -3144,7 +3177,7 @@ $compactAfterClose = (
     $context.Mode -eq 'Dao' -and
     $Mode -in @(
         'ImportCustomerCoordinates', 'ImportDpCoordinates', 'MoveResvCoordinatesToDp',
-        'SetOapCoordinate', 'FixCustomerDempingValues', 'ApplyDempingContingency',
+        'SetOapCoordinate', 'UppercaseOap', 'FixCustomerDempingValues', 'ApplyDempingContingency',
         'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh',
         'ApplyGlaspoortProject', 'ApplyConnectionSync', 'ApplyRiserData',
         'AddRiserData', 'DeleteRiserData', 'ApplyBuiseind', 'ApplyPartialDelivery'
@@ -3180,6 +3213,11 @@ try {
 
         'SetOapCoordinate' {
             Set-OapCoordinate -Database $context.Database -XValue $X -YValue $Y -NearestDpLabel $NearestDpLabel | ConvertTo-Json -Depth 4
+            break
+        }
+
+        'UppercaseOap' {
+            Uppercase-OapLabels -Database $context.Database | ConvertTo-Json -Depth 4
             break
         }
 

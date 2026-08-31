@@ -6,6 +6,7 @@ param(
     [string]$ProjectFolderPath = $null,
     [string]$MetadataPath = $null,
     [switch]$AnalyzeOnly,
+    [switch]$UppercaseOap,
     [string]$AnalysisOutputPath = $null,
     [switch]$ExportComplexAssignmentsOnly,
     [string]$ComplexAssignmentsOutputPath = $null,
@@ -2913,6 +2914,30 @@ $bcRows = Import-BcRows -Path $resolvedBc
 
 Write-Host 'Construyendo modelo del proyecto'
 $model = Build-ProjectModel -FcRows $fcRows -BcRows $bcRows -InternalDpDecisions $internalDpDecisions
+$projectLabelBeforeCase = Normalize-Text $model.ProjectLabel
+if ($UppercaseOap -and $null -ne $projectLabelBeforeCase) {
+    $projectLabelUpper = $projectLabelBeforeCase.ToUpperInvariant()
+    $replaceProjectPrefix = {
+        param([object]$Value)
+        $text = Normalize-Text $Value
+        if ($null -eq $text) { return $null }
+        return [regex]::Replace($text, [regex]::Escape($projectLabelBeforeCase), $projectLabelUpper, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    }
+    $model.ProjectLabel = $projectLabelUpper
+    foreach ($customer in $model.Customers) {
+        $customer.CableId = & $replaceProjectPrefix $customer.CableId
+        $customer.DpLabel = & $replaceProjectPrefix $customer.DpLabel
+        $customer.ProjectLabel = $projectLabelUpper
+    }
+    foreach ($chain in $model.Chains) {
+        foreach ($segment in $chain.Segments) {
+            $segment.DpLabel = & $replaceProjectPrefix $segment.DpLabel
+            $segment.IncomingCable = & $replaceProjectPrefix $segment.IncomingCable
+            $segment.OutgoingCable = & $replaceProjectPrefix $segment.OutgoingCable
+        }
+    }
+    Write-Host "Mayusculizado OAP/proyecto: $projectLabelBeforeCase -> $projectLabelUpper"
+}
 $ambiguousInternalDps = @(Get-AmbiguousInternalDpCandidates -Model $model -InternalDpDecisions $internalDpDecisions)
 
 if ($AnalyzeOnly) {

@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('fiberApp', {
   placePhktTexts: (payload) => ipcRenderer.invoke('dwg:place-phkt-texts', payload),
   placeRoutingPhktFromCheck: (payload) => ipcRenderer.invoke('dwg:place-routing-phkt-from-check', payload),
   getOapCoordinate: (payload) => ipcRenderer.invoke('dwg:get-oap-coordinate', payload),
+  uppercaseOap: (payload) => ipcRenderer.invoke('mdb:uppercase-oap', payload),
   pickRiserEtCoordinate: (payload) => ipcRenderer.invoke('dwg:pick-riser-et-coordinate', payload),
   cancelGeneration: () => ipcRenderer.invoke('generation:cancel'),
   showItemInFolder: (targetPath) => ipcRenderer.invoke('shell:show-item', targetPath),
