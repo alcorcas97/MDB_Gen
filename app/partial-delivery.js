@@ -9,7 +9,8 @@ const elements = {
   manualInput: document.getElementById('manualInput'), addManualButton: document.getElementById('addManualButton'), importTxtButton: document.getElementById('importTxtButton'),
   importBcButton: document.getElementById('importBcButton'),
   importSummary: document.getElementById('importSummary'), selectedRows: document.getElementById('selectedRows'), clearSelectionButton: document.getElementById('clearSelectionButton'),
-  ftuTypeOptions: document.getElementById('ftuTypeOptions'), generateButton: document.getElementById('generateButton'), openOutputButton: document.getElementById('openOutputButton'), logOutput: document.getElementById('logOutput')
+  ftuTypeOptions: document.getElementById('ftuTypeOptions'), generateButton: document.getElementById('generateButton'), openOutputButton: document.getElementById('openOutputButton'),
+  drawCoordinatesButton: document.getElementById('drawCoordinatesButton'), clearCoordinatesButton: document.getElementById('clearCoordinatesButton'), extractCoordinatesButton: document.getElementById('extractCoordinatesButton'), logOutput: document.getElementById('logOutput')
 };
 const state = { connections: [], selected: new Map(), loadedSource: '', running: false, lastOutput: null };
 
@@ -23,7 +24,7 @@ function searchable(item) { return [item.kabelId, item.phkt, formatAddress(item)
 function parseIdentifiers(text) { const seen = new Set(); return String(text ?? '').replace(/^\uFEFF/, '').split(/[\r\n;,]+/).map(normalize).filter((item) => { const id = key(item); if (!id || seen.has(id)) return false; seen.add(id); return true; }); }
 function setStatus(message, tone = 'neutral') { elements.statusBanner.textContent = message; elements.statusBanner.dataset.tone = tone; }
 function appendLog(message, tone = 'info') { for (const line of String(message ?? '').replace(/\r/g, '').split('\n').filter(Boolean)) { const row = document.createElement('div'); row.className = `log-line ${tone}`; row.textContent = `[${new Date().toLocaleTimeString('es-ES')}] ${line}`; elements.logOutput.append(row); } elements.logOutput.scrollTop = elements.logOutput.scrollHeight; }
-function setBusy(running) { state.running = running; for (const element of [elements.sourceProjectPath, elements.targetProjectPath, elements.backupFolderPath, elements.browseSourceButton, elements.browseTargetButton, elements.browseBackupButton, elements.reloadButton, elements.expandComplexInput, elements.searchInput, elements.manualInput, elements.addManualButton, elements.importTxtButton, elements.importBcButton, elements.clearSelectionButton, elements.generateButton]) element.disabled = running; elements.openOutputButton.disabled = running || !state.lastOutput; }
+function setBusy(running) { state.running = running; for (const element of [elements.sourceProjectPath, elements.targetProjectPath, elements.backupFolderPath, elements.browseSourceButton, elements.browseTargetButton, elements.browseBackupButton, elements.reloadButton, elements.expandComplexInput, elements.searchInput, elements.manualInput, elements.addManualButton, elements.importTxtButton, elements.importBcButton, elements.clearSelectionButton, elements.generateButton]) element.disabled = running; for (const element of [elements.drawCoordinatesButton, elements.clearCoordinatesButton, elements.extractCoordinatesButton]) element.disabled = running || !state.lastOutput; elements.openOutputButton.disabled = running || !state.lastOutput; }
 
 function updateStats() {
   elements.availableCount.textContent = String(state.connections.length);
@@ -106,7 +107,7 @@ async function loadProject() {
   try {
     const data = await api.loadPartialDeliveryProject({ projectFolderPath });
     state.connections = Array.isArray(data.connections) ? data.connections : [];
-    state.selected.clear(); state.loadedSource = data.sourceProjectPath;
+    state.selected.clear(); state.loadedSource = data.sourceProjectPath; state.lastOutput = null;
     elements.sourceProjectPath.value = data.sourceProjectPath;
     elements.targetProjectPath.value = data.targetProjectPath;
     elements.backupFolderPath.value = data.backupFolderPath;
@@ -175,6 +176,25 @@ async function generate() {
   finally { setBusy(false); }
 }
 
+async function runCoordinateTool(kind) {
+  const projectFolderPath = normalize(state.lastOutput);
+  if (!projectFolderPath) {
+    setStatus('Genera primero el Partial Delivery para trabajar sobre su DWG y MDB.', 'warning');
+    appendLog('La herramienta de coordenadas necesita la carpeta del Partial Delivery generado.', 'warning');
+    return;
+  }
+  const actions = {
+    draw: { button: elements.drawCoordinatesButton, start: 'Dibujando coordenadas de clientes en el Partial Delivery...', call: () => api.drawCustomerCoordinates({ projectFolderPath }), done: (result) => `Dibujo completado: ${result.drawnCount} textos escritos en el DWG parcial.` },
+    clear: { button: elements.clearCoordinatesButton, start: 'Limpiando coordenadas de clientes del Partial Delivery...', call: () => api.clearCustomerCoordinates({ projectFolderPath }), done: (result) => `Limpieza completada: ${result.removedCount} etiquetas borradas del DWG parcial.` },
+    extract: { button: elements.extractCoordinatesButton, start: 'Extrayendo coordenadas de clientes al MDB parcial...', call: () => api.extractCustomerCoordinates({ projectFolderPath }), done: (result) => `Exportación completada: ${result.updated} clientes actualizados desde ${result.coordinateCount} textos.` }
+  };
+  const action = actions[kind]; if (!action) return;
+  setBusy(true); setStatus(action.start, 'neutral'); appendLog(action.start, 'info');
+  try { const result = await action.call(); setStatus(action.done(result), 'success'); appendLog(action.done(result), 'success'); }
+  catch (error) { const message = error instanceof Error ? error.message : String(error); setStatus(message, 'error'); appendLog(message, 'error'); }
+  finally { setBusy(false); }
+}
+
 elements.browseSourceButton.addEventListener('click', () => void chooseFolder(elements.sourceProjectPath, true));
 elements.browseTargetButton.addEventListener('click', () => void (async () => {
   const proposedName = basename(elements.targetProjectPath.value) || 'Partial-Delivery-A';
@@ -199,6 +219,9 @@ elements.selectedRows.addEventListener('input', (event) => {
 elements.clearSelectionButton.addEventListener('click', () => { state.selected.clear(); renderSelected(); });
 elements.generateButton.addEventListener('click', () => void generate());
 elements.openOutputButton.addEventListener('click', () => { if (state.lastOutput) void api.showItemInFolder(state.lastOutput); });
+elements.drawCoordinatesButton.addEventListener('click', () => void runCoordinateTool('draw'));
+elements.clearCoordinatesButton.addEventListener('click', () => void runCoordinateTool('clear'));
+elements.extractCoordinatesButton.addEventListener('click', () => void runCoordinateTool('extract'));
 api.onPartialDeliveryEvent((event) => { if (event?.message) { setStatus(event.message, event.stage === 'done' ? 'success' : 'neutral'); appendLog(event.message, event.stage === 'done' ? 'success' : 'info'); } });
 
 const initialPath = new URLSearchParams(window.location.search).get('projectFolderPath') ?? '';

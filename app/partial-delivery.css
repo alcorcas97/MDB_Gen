@@ -36,5 +36,6 @@ textarea { width: 100%; resize: vertical; min-height: 124px; border: 1px solid r
 .generate-bar { display: flex; gap: 12px; align-items: center; margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(95, 75, 48, .16); }
 .generate-bar > div { display: grid; flex: 1; gap: 3px; }
 .generate-bar span { color: #766b5e; font-size: 13px; }
+.partial-coordinate-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .partial-log-panel .log-output { min-height: 130px; max-height: 260px; }
 @media (max-width: 1050px) { .partial-hero, .picker-grid { grid-template-columns: 1fr; } .generate-bar { align-items: stretch; flex-direction: column; } }
