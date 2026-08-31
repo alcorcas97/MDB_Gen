@@ -2933,7 +2933,7 @@ function Apply-PartialDelivery {
         $newAddress = ($newAddressParts -join '-').ToUpperInvariant()
         $newCustomer = [pscustomobject]@{
             ID = 0; Postcode = Normalize-Text $edit.postcode; Huisnr = $newHouseNumber; Toevoeging = Normalize-Text $edit.houseSuffix;
-            Kastnr = $newStatus; FTUType = Normalize-Text $edit.ftuType; Kabel = $newCableId; VEZELNR1 = 1;
+            Kastnr = $newStatus; FTUType = if ($newStatus -eq 'GV') { $null } else { Normalize-Text $edit.ftuType }; Kabel = $newCableId; VEZELNR1 = 1;
             Dempingswaarde1A = Convert-ToNullableDouble $edit.demping1A; Specificatie1A = $null; Dempingswaarde1Z = Convert-ToNullableDouble $edit.demping1Z;
             Specificatie1Z = $null; Vezelnr2 = $null; Dempingswaarde2A = Convert-ToNullableDouble $edit.demping2A; Specificatie2A = $null;
             Dempingswaarde2Z = Convert-ToNullableDouble $edit.demping2Z; Specificatie2Z = $null; X = 0; Y = 0; ImportResult = $null;
@@ -3002,7 +3002,7 @@ function Apply-PartialDelivery {
         $customerCableId = Normalize-Text $customer.Kabel
         if ($null -eq $customerCableId -or -not $editLookup.ContainsKey($customerCableId.ToUpperInvariant())) { continue }
         $edit = $editLookup[$customerCableId.ToUpperInvariant()]
-        if ($edit.PSObject.Properties.Name -contains 'status') { $customer.Kastnr = Normalize-UpperStatus $edit.status }
+        if ($edit.PSObject.Properties.Name -contains 'status') { $customer.Kastnr = Normalize-UpperStatus $edit.status; if ($customer.Kastnr -eq 'GV') { $customer.FTUType = $null } }
         if ($edit.PSObject.Properties.Name -contains 'ftuType') { $customer.FTUType = Normalize-Text $edit.ftuType }
         foreach ($mapping in @(
             @{ Json = 'demping1A'; Field = 'Dempingswaarde1A' },

@@ -17,6 +17,7 @@ const state = { connections: [], selected: new Map(), loadedSource: '', running:
 function normalize(value) { return String(value ?? '').replace(/[\u00A0\u202F]/g, ' ').trim(); }
 function key(value) { return normalize(value).replace(/\s+/g, '').toUpperCase().replace(/^K-/, ''); }
 function addressKey(value) { return normalize(value).replace(/[^A-Z0-9]/gi, '').toUpperCase(); }
+function parseDecimal(value) { const text = normalize(value).replace(',', '.'); if (!text) return null; const parsed = Number(text); return Number.isFinite(parsed) ? parsed : null; }
 function basename(value) { const text = normalize(value); const index = Math.max(text.lastIndexOf('\\'), text.lastIndexOf('/')); return index >= 0 ? text.slice(index + 1) : text; }
 function dirname(value) { const text = normalize(value); const index = Math.max(text.lastIndexOf('\\'), text.lastIndexOf('/')); return index >= 0 ? text.slice(0, index) : ''; }
 function joinPath(parent, child) { return `${normalize(parent).replace(/[\\/]+$/, '')}\\${normalize(child).replace(/^[\\/]+/, '')}`; }
@@ -36,7 +37,7 @@ function updateStats() {
 function renderSelected() {
   const items = [...state.selected.values()].sort((a, b) => formatAddress(a).localeCompare(formatAddress(b), 'es', { numeric: true }));
   if (items.length === 0) elements.selectedRows.innerHTML = '<tr><td colspan="14" class="empty-cell">Todavía no hay conexiones seleccionadas.</td></tr>';
-  else elements.selectedRows.innerHTML = items.map((item) => `<tr data-connection="${escapeHtml(item.kabelId)}"><td><strong>${escapeHtml(formatAddress(item))}</strong><br><small>${escapeHtml(item.phkt ?? '')}</small></td><td>${escapeHtml(item.kabelId)}</td><td>${escapeHtml(item.dpLabel ?? '')}</td><td>${escapeHtml(item.complex ?? 'Individual')}</td><td><select class="connection-edit status-edit" data-field="status">${renderStatusOptions(item.kastnr)}</select></td><td><input class="connection-edit ftu-edit" data-field="ftuType" list="ftuTypeOptions" value="${escapeHtml(item.ftuType ?? '')}" placeholder="Sin FTU"></td>${[['fiber','Vezel'], ['cassette','Cassette'], ['cassettePosition','Pos. cassette'], ['demping1A','Demping 1A'], ['demping1Z','Demping 1Z'], ['demping2A','Demping 2A'], ['demping2Z','Demping 2Z']].map(([field]) => `<td><input class="connection-edit ${field.startsWith('demping') ? 'demping-edit' : 'topology-edit'}" data-field="${field}" type="number" step="${field.startsWith('demping') ? '0.01' : '1'}" value="${escapeHtml(item[field] ?? '')}" placeholder="—"></td>`).join('')}<td><button class="remove-connection" data-cable="${escapeHtml(item.kabelId)}" title="Eliminar" type="button">×</button></td></tr>`).join('');
+  else elements.selectedRows.innerHTML = items.map((item) => `<tr data-connection="${escapeHtml(item.kabelId)}"><td><strong>${escapeHtml(formatAddress(item))}</strong><br><small>${escapeHtml(item.phkt ?? '')}</small></td><td>${escapeHtml(item.kabelId)}</td><td>${escapeHtml(item.dpLabel ?? '')}</td><td>${escapeHtml(item.complex ?? 'Individual')}</td><td><select class="connection-edit status-edit" data-field="status">${renderStatusOptions(item.kastnr)}</select></td><td><input class="connection-edit ftu-edit" data-field="ftuType" list="ftuTypeOptions" value="${escapeHtml(item.ftuType ?? '')}" placeholder="Sin FTU"></td>${[['fiber','Vezel'], ['cassette','Cassette'], ['cassettePosition','Pos. cassette'], ['demping1A','Demping 1A'], ['demping1Z','Demping 1Z'], ['demping2A','Demping 2A'], ['demping2Z','Demping 2Z']].map(([field]) => `<td><input class="connection-edit ${field.startsWith('demping') ? 'demping-edit' : 'topology-edit'}" data-field="${field}" type="${field.startsWith('demping') ? 'text' : 'number'}" inputmode="decimal" step="${field.startsWith('demping') ? 'any' : '1'}" value="${escapeHtml(item[field] ?? '')}" placeholder="${field.startsWith('demping') ? '0.00' : '—'}"></td>`).join('')}<td><button class="remove-connection" data-cable="${escapeHtml(item.kabelId)}" title="Eliminar" type="button">×</button></td></tr>`).join('');
   updateStats();
 }
 
@@ -160,10 +161,8 @@ async function generate() {
         kabelId: item.kabelId,
         status: normalize(item.kastnr) || null,
         ftuType: normalize(item.ftuType) || null,
-        demping1A: item.demping1A === '' || item.demping1A === null || item.demping1A === undefined ? null : Number(item.demping1A),
-        demping1Z: item.demping1Z === '' || item.demping1Z === null || item.demping1Z === undefined ? null : Number(item.demping1Z),
-        demping2A: item.demping2A === '' || item.demping2A === null || item.demping2A === undefined ? null : Number(item.demping2A),
-        demping2Z: item.demping2Z === '' || item.demping2Z === null || item.demping2Z === undefined ? null : Number(item.demping2Z),
+        demping1A: parseDecimal(item.demping1A), demping1Z: parseDecimal(item.demping1Z),
+        demping2A: parseDecimal(item.demping2A), demping2Z: parseDecimal(item.demping2Z),
         postcode: item.postcode, houseNumber: item.houseNumber, houseSuffix: item.houseSuffix, room: item.room,
         complex: item.complex, dpLabel: item.dpLabel, statusCode: item.bcStatusCode,
         fiber: item.bcFiber, odf: item.bcOdf, strengId: item.bcStrengId, buildingType: item.buildingType
@@ -217,8 +216,8 @@ elements.selectedRows.addEventListener('input', (event) => {
   const input = event.target.closest('.connection-edit'); const row = event.target.closest('[data-connection]');
   if (!input || !row) return;
   const item = state.selected.get(key(row.dataset.connection)); if (!item) return;
-  if (input.dataset.field === 'status') item.kastnr = input.value;
-  else item[input.dataset.field] = input.value;
+  if (input.dataset.field === 'status') { item.kastnr = input.value; if (normalize(input.value).toUpperCase() === 'GV') { item.ftuType = ''; const ftuInput = row.querySelector('[data-field="ftuType"]'); if (ftuInput) ftuInput.value = ''; } }
+  else item[input.dataset.field] = input.dataset.field.startsWith('demping') ? input.value.replace(',', '.') : input.value;
 });
 elements.clearSelectionButton.addEventListener('click', () => { state.selected.clear(); renderSelected(); });
 elements.generateButton.addEventListener('click', () => void generate());
