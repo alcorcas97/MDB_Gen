@@ -2814,6 +2814,8 @@ function Export-PartialDeliveryData {
         $kabelId = Normalize-Text $customer.Kabel
         if ($null -eq $kabelId) { continue }
         $cable = $cableLookup[$kabelId.ToUpperInvariant()]
+        $las = @((Get-TableRows -Database $Database -TableName 'Las') | Where-Object { (Normalize-Text $_.KabelB).ToUpperInvariant() -eq $kabelId.ToUpperInvariant() -and (Normalize-Text $_.VezelnrB) -eq '1' } | Select-Object -First 1)
+        $parkingLas = @((Get-TableRows -Database $Database -TableName 'Las') | Where-Object { (Normalize-Text $_.KabelB).ToUpperInvariant() -eq $kabelId.ToUpperInvariant() -and (Normalize-Text $_.VezelnrB) -eq '2' } | Select-Object -First 1)
         $connections += [pscustomobject]@{
             id          = $customer.ID
             kabelId     = $kabelId
@@ -2830,6 +2832,11 @@ function Export-PartialDeliveryData {
             demping1Z   = Convert-ToNullableDouble $customer.Dempingswaarde1Z
             demping2A   = Convert-ToNullableDouble $customer.Dempingswaarde2A
             demping2Z   = Convert-ToNullableDouble $customer.Dempingswaarde2Z
+            fiber       = if (@($las).Count -gt 0) { [int]$las[0].VezelnrA } else { $null }
+            cassette    = if (@($las).Count -gt 0) { [int]$las[0].Cassette } else { $null }
+            cassettePosition = if (@($las).Count -gt 0) { [int]$las[0].Positienr } else { $null }
+            parkingCassette = if (@($parkingLas).Count -gt 0) { [int]$parkingLas[0].Cassette } else { $null }
+            parkingPosition = if (@($parkingLas).Count -gt 0) { [int]$parkingLas[0].Positienr } else { $null }
         }
     }
 
@@ -2962,12 +2969,22 @@ function Apply-PartialDelivery {
             foreach ($property in $spliceTemplate.PSObject.Properties) { $clone[$property.Name] = $property.Value }
             $clone.KabelB = $newCableId; $clone.VezelnrB = 1
             if ($requestedFiber -gt 0) { $clone.VezelnrA = $requestedFiber }
+            $requestedCassette = 0; $requestedPosition = 0
+            [void][int]::TryParse((Normalize-Text $edit.cassette), [ref]$requestedCassette)
+            [void][int]::TryParse((Normalize-Text $edit.cassettePosition), [ref]$requestedPosition)
+            if ($requestedCassette -gt 0) { $clone.Cassette = $requestedCassette }
+            if ($requestedPosition -gt 0) { $clone.Positienr = $requestedPosition }
             $allLas += [pscustomobject]$clone
             $parkingTemplate = @($templateLas | Where-Object { (Normalize-Text $_.VezelnrB) -eq '2' } | Select-Object -First 1)
             if (@($parkingTemplate).Count -gt 0) {
                 $parkingClone = [ordered]@{}
                 foreach ($property in $parkingTemplate[0].PSObject.Properties) { $parkingClone[$property.Name] = $property.Value }
                 $parkingClone.KabelB = $newCableId; $parkingClone.VezelnrB = 2
+                $parkingCassette = 0; $parkingPosition = 0
+                [void][int]::TryParse((Normalize-Text $edit.parkingCassette), [ref]$parkingCassette)
+                [void][int]::TryParse((Normalize-Text $edit.parkingPosition), [ref]$parkingPosition)
+                if ($parkingCassette -gt 0) { $parkingClone.Cassette = $parkingCassette }
+                if ($parkingPosition -gt 0) { $parkingClone.Positienr = $parkingPosition }
                 $allLas += [pscustomobject]$parkingClone
             }
         }
@@ -3023,6 +3040,19 @@ function Apply-PartialDelivery {
                 $las.zijde_fasplaat = $source[0].zijde_fasplaat
                 $las.Gelast = 'j'
             }
+            $cassette = 0; $position = 0
+            [void][int]::TryParse((Normalize-Text $edit.cassette), [ref]$cassette)
+            [void][int]::TryParse((Normalize-Text $edit.cassettePosition), [ref]$position)
+            if ($cassette -gt 0) { $las.Cassette = $cassette }
+            if ($position -gt 0) { $las.Positienr = $position }
+        }
+        $parkingRows = @($allLas | Where-Object { $cableB = Normalize-Text $_.KabelB; $null -ne $cableB -and $cableB.ToUpperInvariant() -eq $editCableId.ToUpperInvariant() -and (Normalize-Text $_.VezelnrB) -eq '2' })
+        $parkingCassette = 0; $parkingPosition = 0
+        [void][int]::TryParse((Normalize-Text $edit.parkingCassette), [ref]$parkingCassette)
+        [void][int]::TryParse((Normalize-Text $edit.parkingPosition), [ref]$parkingPosition)
+        foreach ($parking in $parkingRows) {
+            if ($parkingCassette -gt 0) { $parking.Cassette = $parkingCassette }
+            if ($parkingPosition -gt 0) { $parking.Positienr = $parkingPosition }
         }
     }
 

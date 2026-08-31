@@ -31,6 +31,7 @@ textarea { width: 100%; resize: vertical; min-height: 124px; border: 1px solid r
 .selected-table .connection-edit { min-width: 92px; padding: 8px 9px; border: 1px solid rgba(95, 75, 48, .24); border-radius: 9px; background: #fff; color: #342f2a; font: inherit; }
 .selected-table .ftu-edit { min-width: 125px; }
 .selected-table .demping-edit { width: 88px; min-width: 88px; }
+.selected-table .topology-edit { width: 76px; min-width: 76px; }
 .empty-cell { text-align: center; color: #817567; padding: 28px !important; }
 .remove-connection { border: 0; background: #f7ded7; color: #8e3021; border-radius: 999px; width: 28px; height: 28px; cursor: pointer; font-weight: 800; }
 .generate-bar { display: flex; gap: 12px; align-items: center; margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(95, 75, 48, .16); }

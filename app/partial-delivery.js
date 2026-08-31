@@ -35,8 +35,8 @@ function updateStats() {
 
 function renderSelected() {
   const items = [...state.selected.values()].sort((a, b) => formatAddress(a).localeCompare(formatAddress(b), 'es', { numeric: true }));
-  if (items.length === 0) elements.selectedRows.innerHTML = '<tr><td colspan="11" class="empty-cell">Todavía no hay conexiones seleccionadas.</td></tr>';
-  else elements.selectedRows.innerHTML = items.map((item) => `<tr data-connection="${escapeHtml(item.kabelId)}"><td><strong>${escapeHtml(formatAddress(item))}</strong><br><small>${escapeHtml(item.phkt ?? '')}</small></td><td>${escapeHtml(item.kabelId)}</td><td>${escapeHtml(item.dpLabel ?? '')}</td><td>${escapeHtml(item.complex ?? 'Individual')}</td><td><select class="connection-edit status-edit" data-field="status">${renderStatusOptions(item.kastnr)}</select></td><td><input class="connection-edit ftu-edit" data-field="ftuType" list="ftuTypeOptions" value="${escapeHtml(item.ftuType ?? '')}" placeholder="Sin FTU"></td>${['demping1A', 'demping1Z', 'demping2A', 'demping2Z'].map((field) => `<td><input class="connection-edit demping-edit" data-field="${field}" type="number" step="0.01" value="${escapeHtml(item[field] ?? '')}" placeholder="—"></td>`).join('')}<td><button class="remove-connection" data-cable="${escapeHtml(item.kabelId)}" title="Eliminar" type="button">×</button></td></tr>`).join('');
+  if (items.length === 0) elements.selectedRows.innerHTML = '<tr><td colspan="14" class="empty-cell">Todavía no hay conexiones seleccionadas.</td></tr>';
+  else elements.selectedRows.innerHTML = items.map((item) => `<tr data-connection="${escapeHtml(item.kabelId)}"><td><strong>${escapeHtml(formatAddress(item))}</strong><br><small>${escapeHtml(item.phkt ?? '')}</small></td><td>${escapeHtml(item.kabelId)}</td><td>${escapeHtml(item.dpLabel ?? '')}</td><td>${escapeHtml(item.complex ?? 'Individual')}</td><td><select class="connection-edit status-edit" data-field="status">${renderStatusOptions(item.kastnr)}</select></td><td><input class="connection-edit ftu-edit" data-field="ftuType" list="ftuTypeOptions" value="${escapeHtml(item.ftuType ?? '')}" placeholder="Sin FTU"></td>${[['fiber','Vezel'], ['cassette','Cassette'], ['cassettePosition','Pos. cassette'], ['demping1A','Demping 1A'], ['demping1Z','Demping 1Z'], ['demping2A','Demping 2A'], ['demping2Z','Demping 2Z']].map(([field]) => `<td><input class="connection-edit ${field.startsWith('demping') ? 'demping-edit' : 'topology-edit'}" data-field="${field}" type="number" step="${field.startsWith('demping') ? '0.01' : '1'}" value="${escapeHtml(item[field] ?? '')}" placeholder="—"></td>`).join('')}<td><button class="remove-connection" data-cable="${escapeHtml(item.kabelId)}" title="Eliminar" type="button">×</button></td></tr>`).join('');
   updateStats();
 }
 
@@ -89,6 +89,7 @@ function mergeBcRows(rows) {
     const existing = state.connections.find((item) => key(item.kabelId) === key(row.kabelId));
     if (existing) {
       existing.bcStatusCode = row.statusCode; existing.bcFiber = row.fiber; existing.bcOdf = row.odf; existing.bcStrengId = row.strengId;
+      if (row.fiber !== null && row.fiber !== undefined && row.fiber !== '') existing.fiber = row.fiber;
       if (!normalize(existing.ftuType)) existing.ftuType = row.ftuType;
       enriched++;
       continue;
