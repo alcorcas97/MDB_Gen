@@ -188,7 +188,7 @@ async function runCoordinateTool(kind) {
   }
   const actions = {
     draw: { button: elements.drawCoordinatesButton, start: 'Dibujando coordenadas de clientes en el Partial Delivery...', call: () => api.drawCustomerCoordinates({ projectFolderPath }), done: (result) => `Dibujo completado: ${result.drawnCount} textos escritos en el DWG parcial.` },
-    clear: { button: elements.clearCoordinatesButton, start: 'Limpiando coordenadas de clientes del Partial Delivery...', call: () => api.clearCustomerCoordinates({ projectFolderPath }), done: (result) => `Limpieza completada: ${result.removedCount} etiquetas borradas del DWG parcial.` },
+    clear: { button: elements.clearCoordinatesButton, start: 'Limpiando coordenadas de clientes del Partial Delivery...', call: () => api.clearCustomerCoordinates({ projectFolderPath, purge: false }), done: (result) => `Limpieza completada: ${result.removedCount} etiquetas borradas del DWG parcial (layers conservadas).` },
     extract: { button: elements.extractCoordinatesButton, start: 'Extrayendo coordenadas de clientes al MDB parcial...', call: () => api.extractCustomerCoordinates({ projectFolderPath }), done: (result) => `Exportación completada: ${result.updated} clientes actualizados desde ${result.coordinateCount} textos.` }
   };
   const action = actions[kind]; if (!action) return;

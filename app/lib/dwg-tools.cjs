@@ -918,7 +918,7 @@ ${buildProgressHelpersLisp(progressFilePath)}
 `;
 }
 
-function buildClearCustomerCoordinatesLisp({ progressFilePath }) {
+function buildClearCustomerCoordinatesLisp({ progressFilePath, purge = true }) {
   return `(setq fmdb-customer-layers '${toLispStringList([...CUSTOMER_LAYER_COLORS.keys()])})
 ${buildProgressHelpersLisp(progressFilePath)}
 
@@ -962,8 +962,7 @@ ${buildProgressHelpersLisp(progressFilePath)}
   (fmdb-report-stage "delete")
   (setq deletedCount (fmdb-delete-existing-on-layers fmdb-customer-layers))
   (fmdb-report-result "DELETED" (itoa deletedCount))
-  (fmdb-report-stage "purge")
-  (command "_.-PURGE" "_All" "*" "_No")
+  ${purge ? '(fmdb-report-stage "purge")\n  (command "_.-PURGE" "_All" "*" "_No")' : ';; Partial Delivery: conservar layers y omitir PURGE ALL'}
   (fmdb-report-stage "audit")
   (command "_.AUDIT" "_Y")
   (fmdb-report-done "CLEAN")
@@ -2568,7 +2567,7 @@ async function clearCustomerCoordinatesInDwg(projectFolderPath, options = {}) {
 
   try {
     await removeFileIfExists(progressFilePath);
-    await fsp.writeFile(lispFilePath, buildClearCustomerCoordinatesLisp({ progressFilePath }), 'utf8');
+    await fsp.writeFile(lispFilePath, buildClearCustomerCoordinatesLisp({ progressFilePath, purge: options.purge !== false }), 'utf8');
 
     let timedOut = false;
     let usedOpenDocument = false;
