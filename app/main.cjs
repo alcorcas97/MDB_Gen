@@ -1806,14 +1806,19 @@ async function copySelectedComplexFolders(sourceProjectPath, targetProjectPath, 
   const targetRoot = path.join(targetProjectPath, 'Gebouwen');
   const copied = [];
   const missing = [];
+  const sourceEntries = await fsp.readdir(sourceRoot, { withFileTypes: true }).catch(() => []);
   for (const complex of [...new Set((complexes ?? []).filter(Boolean))]) {
-    const sourcePath = path.join(sourceRoot, complex);
-    if (!(await pathExists(sourcePath))) {
+    const requestedName = String(complex).trim();
+    const matchingEntry = sourceEntries.find((entry) => entry.isDirectory()
+      && entry.name.localeCompare(requestedName, 'es', { sensitivity: 'base' }) === 0);
+    const actualName = matchingEntry?.name ?? requestedName;
+    const sourcePath = path.join(sourceRoot, actualName);
+    if (!matchingEntry || !(await pathExists(sourcePath))) {
       missing.push(complex);
       continue;
     }
-    await fsp.cp(sourcePath, path.join(targetRoot, complex), { recursive: true, errorOnExist: true });
-    copied.push(complex);
+    await fsp.cp(sourcePath, path.join(targetRoot, actualName), { recursive: true, errorOnExist: true });
+    copied.push(actualName);
   }
   return { copied, missing };
 }
