@@ -16,6 +16,7 @@ const state = { connections: [], selected: new Map(), loadedSource: '', running:
 
 function normalize(value) { return String(value ?? '').replace(/[\u00A0\u202F]/g, ' ').trim(); }
 function key(value) { return normalize(value).replace(/\s+/g, '').toUpperCase().replace(/^K-/, ''); }
+function addressKey(value) { return normalize(value).replace(/[^A-Z0-9]/gi, '').toUpperCase(); }
 function basename(value) { const text = normalize(value); const index = Math.max(text.lastIndexOf('\\'), text.lastIndexOf('/')); return index >= 0 ? text.slice(index + 1) : text; }
 function dirname(value) { const text = normalize(value); const index = Math.max(text.lastIndexOf('\\'), text.lastIndexOf('/')); return index >= 0 ? text.slice(0, index) : ''; }
 function joinPath(parent, child) { return `${normalize(parent).replace(/[\\/]+$/, '')}\\${normalize(child).replace(/^[\\/]+/, '')}`; }
@@ -66,7 +67,7 @@ function addIdentifiers(text) {
   const identifiers = parseIdentifiers(text); const matches = []; const unmatched = [];
   for (const identifier of identifiers) {
     const requested = key(identifier);
-    const found = state.connections.filter((item) => key(item.kabelId) === requested || key(item.phkt) === requested);
+    const found = state.connections.filter((item) => key(item.kabelId) === requested || key(item.phkt) === requested || addressKey(formatAddress(item)) === addressKey(identifier));
     if (found.length === 0) unmatched.push(identifier); else matches.push(...found);
   }
   addConnections(matches);
@@ -140,7 +141,8 @@ async function importBc() {
     if (!filePath) return;
     const result = await api.readPartialDeliveryBc({ filePath });
     const summary = mergeBcRows(result.rows);
-    elements.importSummary.textContent = `BC importado: ${result.rows.length} filas; ${summary.enriched} actualizadas y ${summary.added} conexiones nuevas disponibles.`;
+    const reapplied = elements.manualInput.value.trim() ? addIdentifiers(elements.manualInput.value) : { matches: [], unmatched: [] };
+    elements.importSummary.textContent = `BC importado: ${result.rows.length} filas; ${summary.enriched} actualizadas y ${summary.added} conexiones nuevas disponibles. Lista reaplicada: ${reapplied.matches.length} coincidencias.`;
     appendLog(`BC importado: ${basename(filePath)}. Filas: ${result.rows.length}; nuevas: ${summary.added}.`, 'success');
   } catch (error) { appendLog(error instanceof Error ? error.message : String(error), 'error'); }
 }
@@ -170,6 +172,7 @@ async function generate() {
     setStatus(`Partial Delivery listo: ${result.selectedConnections} conexiones y ${result.buildingCount} COMPLEX.`, 'success');
     appendLog(`Salida: ${result.targetProjectPath}`, 'success');
     appendLog(`Backup MDB completo: ${result.backupMdbPath}`, 'success');
+    if (result.previousProjectBackupPath) appendLog(`Salida anterior guardada en Back: ${result.previousProjectBackupPath}`, 'warning');
     if (result.dwgManualPending) appendLog('Pendiente: editar manualmente la copia del DWG.', 'warning');
     appendLog('Crc, Email y Routes no se han creado ni copiado: los generará el programa externo.', 'info');
   } catch (error) { const message = error instanceof Error ? error.message : String(error); setStatus(message, 'error'); appendLog(message, 'error'); }

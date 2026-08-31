@@ -1849,9 +1849,7 @@ async function generatePartialDelivery(payload) {
   if (targetNormalized.startsWith(`${sourceNormalized}\\`) || sourceNormalized.startsWith(`${targetNormalized}\\`)) {
     throw new Error('La carpeta de salida no puede contener el origen ni estar dentro de el.');
   }
-  if (await pathExists(targetProjectPath)) {
-    throw new Error(`La carpeta de salida ya existe: ${targetProjectPath}. No se sobrescribira.`);
-  }
+  const existingTargetProject = await pathExists(targetProjectPath);
   const connections = (payload?.connections ?? []).filter((item) => String(item?.kabelId ?? '').trim());
   const cableIds = [...new Set(connections.map((item) => String(item.kabelId).trim()))];
   if (cableIds.length === 0) throw new Error('Selecciona al menos una conexion.');
@@ -1872,10 +1870,18 @@ async function generatePartialDelivery(payload) {
     throw new Error('La carpeta Back debe estar fuera tanto del proyecto completo como del proyecto parcial.');
   }
   let backupMdbPath = null;
+  let previousProjectBackupPath = null;
 
   partialDeliveryRunActive = true;
   try {
     sendPartialDeliveryEvent({ stage: 'prepare', message: 'Preparando copia segura del proyecto...' });
+    if (existingTargetProject) {
+      await fsp.mkdir(backupFolderPath, { recursive: true });
+      const previousName = `${path.basename(targetProjectPath)}_PREVIOUS_${new Date().toISOString().replace(/[:.]/g, '-')}`;
+      previousProjectBackupPath = await getUniquePath(path.join(backupFolderPath, previousName));
+      await fsp.rename(targetProjectPath, previousProjectBackupPath);
+      sendPartialDeliveryEvent({ stage: 'prepare', message: `La salida existente se ha guardado en Back: ${previousProjectBackupPath}` });
+    }
     await fsp.mkdir(tempProjectPath, { recursive: false });
     for (const folderName of ['Boringen', 'Gebouwen', 'Klanten', 'Vergunningen']) {
       await fsp.mkdir(path.join(tempProjectPath, folderName));
@@ -1907,6 +1913,7 @@ async function generatePartialDelivery(payload) {
     return {
       targetProjectPath,
       backupMdbPath,
+      previousProjectBackupPath,
       selectedConnections: cableIds.length,
       buildingCount: buildingSummary.copied.length,
       mdbSummary,
