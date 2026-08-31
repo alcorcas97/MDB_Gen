@@ -5,6 +5,9 @@ const fs = require('node:fs');
 const https = require('node:https');
 const os = require('node:os');
 const path = require('node:path');
+const {
+  buildNextPartialProjectName
+} = require('./lib/partial-delivery.cjs');
 
 const appRoot = path.resolve(__dirname, '..');
 const generatorScriptPath = path.join(appRoot, 'generate_mdb.ps1');
@@ -19,7 +22,9 @@ const selfTestLogPath = path.join(os.tmpdir(), 'fiber-mdb-selftest.json');
 let mainWindow = null;
 let splashWindow = null;
 let riserWindow = null;
+let partialDeliveryWindow = null;
 let activeRun = null;
+let partialDeliveryRunActive = false;
 let projectMetadataModule = null;
 let dwgToolsModule = null;
 let crossCheckToolsModule = null;
@@ -42,6 +47,12 @@ function sendGenerationEvent(payload) {
   }
 
   mainWindow.webContents.send('generation:event', payload);
+}
+
+function sendPartialDeliveryEvent(payload) {
+  if (partialDeliveryWindow && !partialDeliveryWindow.isDestroyed()) {
+    partialDeliveryWindow.webContents.send('partial-delivery:event', payload);
+  }
 }
 
 function sendUpdateEvent(message, level = 'info', progress = null) {
@@ -293,6 +304,10 @@ function createWindow() {
       riserWindow.close();
     }
     riserWindow = null;
+    if (partialDeliveryWindow && !partialDeliveryWindow.isDestroyed()) {
+      partialDeliveryWindow.close();
+    }
+    partialDeliveryWindow = null;
     mainWindow = null;
     closeSplashWindow();
   });
@@ -347,6 +362,45 @@ function openRiserWindow(payload = {}) {
 
   void riserWindow.loadFile(path.join(__dirname, 'riser.html'), { query });
   return riserWindow;
+}
+
+function openPartialDeliveryWindow(payload = {}) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    throw new Error('La ventana principal no esta disponible.');
+  }
+  const query = { projectFolderPath: String(payload.projectFolderPath ?? '').trim() };
+  if (partialDeliveryWindow && !partialDeliveryWindow.isDestroyed()) {
+    void partialDeliveryWindow.loadFile(path.join(__dirname, 'partial-delivery.html'), { query });
+    partialDeliveryWindow.show();
+    partialDeliveryWindow.focus();
+    return partialDeliveryWindow;
+  }
+  partialDeliveryWindow = new BrowserWindow({
+    width: 1500,
+    height: 1000,
+    minWidth: 1180,
+    minHeight: 760,
+    parent: mainWindow,
+    show: false,
+    backgroundColor: '#f6f0e5',
+    autoHideMenuBar: true,
+    icon: fs.existsSync(windowIconPath) ? windowIconPath : undefined,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  });
+  partialDeliveryWindow.once('ready-to-show', () => {
+    if (partialDeliveryWindow && !partialDeliveryWindow.isDestroyed()) {
+      partialDeliveryWindow.show();
+      partialDeliveryWindow.focus();
+    }
+  });
+  partialDeliveryWindow.on('closed', () => { partialDeliveryWindow = null; });
+  void partialDeliveryWindow.loadFile(path.join(__dirname, 'partial-delivery.html'), { query });
+  return partialDeliveryWindow;
 }
 
 function buildFailureMessage(transcript) {
@@ -1705,6 +1759,164 @@ async function resolveProjectWorkingMdbPath(projectFolderPath) {
   return mdbCandidates[0].fullPath;
 }
 
+async function folderContainsPartialSourceFiles(folderPath) {
+  try {
+    const entries = await fsp.readdir(folderPath, { withFileTypes: true });
+    const fileNames = entries.filter((entry) => entry.isFile()).map((entry) => entry.name.toLowerCase());
+    return fileNames.some((name) => name.endsWith('.mdb'))
+      && fileNames.some((name) => name.endsWith('.dwg'));
+  }
+  catch {
+    return false;
+  }
+}
+
+async function resolvePartialSourceProjectPath(inputPath) {
+  const resolved = path.resolve(String(inputPath ?? '').trim());
+  if (!String(inputPath ?? '').trim() || !(await pathExists(resolved))) {
+    throw new Error('Selecciona una carpeta de proyecto valida para el Partial Delivery.');
+  }
+  if (await folderContainsPartialSourceFiles(resolved)) return resolved;
+  const entries = await fsp.readdir(resolved, { withFileTypes: true });
+  const candidates = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const candidate = path.join(resolved, entry.name);
+    if (await folderContainsPartialSourceFiles(candidate)) candidates.push(candidate);
+  }
+  if (candidates.length !== 1) {
+    throw new Error(candidates.length === 0
+      ? 'No se ha encontrado un proyecto con MDB y DWG dentro de la carpeta seleccionada.'
+      : 'Hay varios proyectos posibles dentro de la carpeta. Selecciona directamente el proyecto que quieres reducir.');
+  }
+  return candidates[0];
+}
+
+async function findProjectFile(projectFolderPath, matcher, label) {
+  const entries = await fsp.readdir(projectFolderPath, { withFileTypes: true });
+  const matches = entries.filter((entry) => entry.isFile() && matcher(entry.name));
+  if (matches.length === 0) throw new Error(`No se ha encontrado ${label} en ${projectFolderPath}.`);
+  matches.sort((left, right) => left.name.localeCompare(right.name, 'es', { sensitivity: 'base' }));
+  return path.join(projectFolderPath, matches[0].name);
+}
+
+async function copySelectedComplexFolders(sourceProjectPath, targetProjectPath, complexes) {
+  const sourceRoot = path.join(sourceProjectPath, 'Gebouwen');
+  const targetRoot = path.join(targetProjectPath, 'Gebouwen');
+  const copied = [];
+  const missing = [];
+  for (const complex of [...new Set((complexes ?? []).filter(Boolean))]) {
+    const sourcePath = path.join(sourceRoot, complex);
+    if (!(await pathExists(sourcePath))) {
+      missing.push(complex);
+      continue;
+    }
+    await fsp.cp(sourcePath, path.join(targetRoot, complex), { recursive: true, errorOnExist: true });
+    copied.push(complex);
+  }
+  return { copied, missing };
+}
+
+async function loadPartialDeliveryProject(inputPath) {
+  const sourceProjectPath = await resolvePartialSourceProjectPath(inputPath);
+  const mdbPath = await resolveProjectWorkingMdbPath(sourceProjectPath);
+  const data = await runMdbToolsJson(['-Mode', 'ExportPartialDeliveryData', '-MdbPath', mdbPath]);
+  const targetProjectPath = path.join(path.dirname(sourceProjectPath), buildNextPartialProjectName(path.basename(sourceProjectPath)));
+  return {
+    ...data,
+    sourceProjectPath,
+    sourceMdbPath: mdbPath,
+    targetProjectPath,
+    backupFolderPath: path.join(path.dirname(targetProjectPath), 'Back')
+  };
+}
+
+async function generatePartialDelivery(payload) {
+  if (activeRun || partialDeliveryRunActive) throw new Error('Ya hay una operacion en curso.');
+  const sourceProjectPath = await resolvePartialSourceProjectPath(payload?.sourceProjectPath);
+  const targetProjectPath = path.resolve(String(payload?.targetProjectPath ?? '').trim());
+  const sourceNormalized = normalizePathForComparison(sourceProjectPath);
+  const targetNormalized = normalizePathForComparison(targetProjectPath);
+  if (!String(payload?.targetProjectPath ?? '').trim() || sourceNormalized === targetNormalized) {
+    throw new Error('La salida del Partial Delivery debe ser una carpeta nueva distinta del proyecto completo.');
+  }
+  if (targetNormalized.startsWith(`${sourceNormalized}\\`) || sourceNormalized.startsWith(`${targetNormalized}\\`)) {
+    throw new Error('La carpeta de salida no puede contener el origen ni estar dentro de el.');
+  }
+  if (await pathExists(targetProjectPath)) {
+    throw new Error(`La carpeta de salida ya existe: ${targetProjectPath}. No se sobrescribira.`);
+  }
+  const connections = (payload?.connections ?? []).filter((item) => String(item?.kabelId ?? '').trim());
+  const cableIds = [...new Set(connections.map((item) => String(item.kabelId).trim()))];
+  if (cableIds.length === 0) throw new Error('Selecciona al menos una conexion.');
+
+  const targetParent = path.dirname(targetProjectPath);
+  await fsp.mkdir(targetParent, { recursive: true });
+  const tempProjectPath = path.join(targetParent, `.${path.basename(targetProjectPath)}.partial-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const selectionPath = path.join(os.tmpdir(), `fiber-partial-selection-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
+  const sourceMdbPath = await resolveProjectWorkingMdbPath(sourceProjectPath);
+  const sourceDwgPath = await findProjectFile(sourceProjectPath, (name) => path.extname(name).toLowerCase() === '.dwg', 'el DWG');
+  const targetBaseName = path.basename(targetProjectPath);
+  const targetMdbPath = path.join(tempProjectPath, `${targetBaseName}.mdb`);
+  const targetDwgPath = path.join(tempProjectPath, `${targetBaseName}.dwg`);
+  const backupFolderPath = path.resolve(String(payload?.backupFolderPath ?? '').trim() || path.join(targetParent, 'Back'));
+  const backupNormalized = normalizePathForComparison(backupFolderPath);
+  if (backupNormalized === targetNormalized || backupNormalized.startsWith(`${targetNormalized}\\`)
+      || backupNormalized === sourceNormalized || backupNormalized.startsWith(`${sourceNormalized}\\`)) {
+    throw new Error('La carpeta Back debe estar fuera tanto del proyecto completo como del proyecto parcial.');
+  }
+  let backupMdbPath = null;
+
+  partialDeliveryRunActive = true;
+  try {
+    sendPartialDeliveryEvent({ stage: 'prepare', message: 'Preparando copia segura del proyecto...' });
+    await fsp.mkdir(tempProjectPath, { recursive: false });
+    for (const folderName of ['Boringen', 'Gebouwen', 'Klanten', 'Vergunningen']) {
+      await fsp.mkdir(path.join(tempProjectPath, folderName));
+    }
+    await Promise.all([fsp.copyFile(sourceMdbPath, targetMdbPath), fsp.copyFile(sourceDwgPath, targetDwgPath)]);
+    await fsp.writeFile(selectionPath, JSON.stringify({ connections }, null, 2), 'utf8');
+
+    sendPartialDeliveryEvent({ stage: 'mdb', message: 'Reduciendo, reparando y compactando el MDB...' });
+    const mdbSummary = await runMdbToolsJson([
+      '-Mode', 'ApplyPartialDelivery', '-MdbPath', targetMdbPath, '-AssignmentsPath', selectionPath
+    ]);
+    const buildingSummary = await copySelectedComplexFolders(sourceProjectPath, tempProjectPath, mdbSummary.complexes);
+    if (buildingSummary.missing.length > 0) {
+      throw new Error(`Faltan carpetas Gebouwen para estos COMPLEX: ${buildingSummary.missing.join(', ')}.`);
+    }
+
+    sendPartialDeliveryEvent({ stage: 'dwg', message: 'DWG completo copiado para su edicion manual...' });
+
+    sendPartialDeliveryEvent({ stage: 'backup', message: 'Guardando el MDB completo en Back...' });
+    await fsp.mkdir(backupFolderPath, { recursive: true });
+    const backupName = `${path.basename(sourceMdbPath, path.extname(sourceMdbPath))}_FULL_${new Date().toISOString().replace(/[:.]/g, '-')}.mdb`;
+    backupMdbPath = await getUniquePath(path.join(backupFolderPath, backupName));
+    await fsp.copyFile(sourceMdbPath, backupMdbPath);
+    const [sourceStat, backupStat] = await Promise.all([fsp.stat(sourceMdbPath), fsp.stat(backupMdbPath)]);
+    if (sourceStat.size !== backupStat.size) throw new Error('El backup del MDB completo no coincide en tamano con el original.');
+
+    await fsp.rename(tempProjectPath, targetProjectPath);
+    sendPartialDeliveryEvent({ stage: 'done', message: 'Partial Delivery generado. DWG pendiente de edicion manual.' });
+    return {
+      targetProjectPath,
+      backupMdbPath,
+      selectedConnections: cableIds.length,
+      buildingCount: buildingSummary.copied.length,
+      mdbSummary,
+      dwgManualPending: true
+    };
+  }
+  catch (error) {
+    await fsp.rm(tempProjectPath, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
+  finally {
+    await fsp.rm(selectionPath, { force: true }).catch(() => {});
+    partialDeliveryRunActive = false;
+  }
+}
+
 function runPowerShellFile(scriptPath, scriptArgs, options = {}) {
   return new Promise((resolve, reject) => {
     const runState = {
@@ -2148,6 +2360,25 @@ ipcMain.handle('app:ping', async () => ({
   timestamp: new Date().toISOString(),
   isPackaged: app.isPackaged
 }));
+
+ipcMain.handle('partial-delivery:open-window', async (_event, payload) => {
+  openPartialDeliveryWindow(payload);
+  return { opened: true };
+});
+
+ipcMain.handle('partial-delivery:load-project', async (_event, payload) => (
+  loadPartialDeliveryProject(payload?.projectFolderPath)
+));
+
+ipcMain.handle('partial-delivery:read-list', async (_event, payload) => {
+  const filePath = path.resolve(String(payload?.filePath ?? '').trim());
+  if (!String(payload?.filePath ?? '').trim() || path.extname(filePath).toLowerCase() !== '.txt') {
+    throw new Error('Selecciona un fichero TXT valido.');
+  }
+  return { filePath, text: await fsp.readFile(filePath, 'utf8') };
+});
+
+ipcMain.handle('partial-delivery:generate', async (_event, payload) => generatePartialDelivery(payload));
 
 ipcMain.handle('riser:open-window', async (_event, payload) => {
   validateCrossCheckInput(payload);

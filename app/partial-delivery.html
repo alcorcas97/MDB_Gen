@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Partial Delivery | Fiber MDB Generator</title>
+    <link rel="stylesheet" href="./styles.css">
+    <link rel="stylesheet" href="./partial-delivery.css">
+  </head>
+  <body>
+    <div class="app-shell partial-shell">
+      <header class="hero partial-hero">
+        <div class="hero-copy">
+          <p class="eyebrow">CTTH Delivery</p>
+          <h1>Partial Delivery</h1>
+          <p class="lead">Conserva únicamente las conexiones que deben modificarse y prepara un MDB parcial independiente, compacto y editable.</p>
+        </div>
+        <div class="hero-stats">
+          <article class="hero-card"><span>Disponibles</span><strong id="availableCount">0</strong></article>
+          <article class="hero-card"><span>Seleccionadas</span><strong id="selectedCount">0</strong></article>
+          <article class="hero-card"><span>COMPLEX</span><strong id="complexCount">0</strong></article>
+        </div>
+      </header>
+
+      <main class="partial-layout">
+        <section class="panel partial-source-panel">
+          <div class="panel-head"><div><p class="panel-kicker">Origen y salida</p><h2>Proyecto</h2></div><button id="reloadButton" class="button tertiary" type="button">Recargar</button></div>
+          <label class="field field-wide"><span>Proyecto completo o carpeta que lo contiene</span><div class="path-row"><input id="sourceProjectPath" type="text" spellcheck="false"><button id="browseSourceButton" class="button tertiary" type="button">Buscar</button></div></label>
+          <label class="field field-wide"><span>Carpeta del proyecto parcial</span><div class="path-row"><input id="targetProjectPath" type="text" spellcheck="false"><button id="browseTargetButton" class="button tertiary" type="button">Buscar</button></div></label>
+          <label class="field field-wide"><span>Back del MDB completo (fuera del proyecto parcial)</span><div class="path-row"><input id="backupFolderPath" type="text" spellcheck="false"><button id="browseBackupButton" class="button tertiary" type="button">Buscar</button></div></label>
+          <div id="statusBanner" class="status-banner" data-tone="neutral">Selecciona el proyecto completo y carga sus conexiones.</div>
+        </section>
+
+        <section class="panel partial-picker-panel">
+          <div class="panel-head"><div><p class="panel-kicker">Selección</p><h2>Añadir conexiones</h2></div></div>
+          <label class="complex-toggle"><input id="expandComplexInput" type="checkbox" checked><span><strong>Incluir todo el COMPLEX</strong><small>Desmárcalo para añadir únicamente las conexiones exactas introducidas.</small></span></label>
+
+          <div class="picker-grid">
+            <div class="picker-block">
+              <label class="field"><span>Buscar en las conexiones</span><input id="searchInput" type="search" placeholder="Kabel ID, PHKT, dirección, DP o COMPLEX" autocomplete="off"></label>
+              <div id="searchResults" class="search-results" aria-live="polite"></div>
+            </div>
+            <div class="picker-block">
+              <label class="field"><span>Introducir Kabel ID o PHKT</span><textarea id="manualInput" rows="7" spellcheck="false" placeholder="Uno por línea, o separados por ;"></textarea></label>
+              <div class="inline-actions"><button id="addManualButton" class="button secondary" type="button">Añadir lista</button><button id="importTxtButton" class="button tertiary" type="button">Importar TXT</button></div>
+              <p id="importSummary" class="helper-text">Admite Kabel ID y PHKT exactos.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel partial-selected-panel">
+          <div class="panel-head"><div><p class="panel-kicker">Resultado</p><h2>Conexiones incluidas</h2></div><button id="clearSelectionButton" class="button ghost" type="button">Vaciar</button></div>
+          <div class="selected-table-wrap">
+            <table class="selected-table">
+              <thead><tr><th>Dirección / PHKT</th><th>Kabel ID</th><th>DP</th><th>COMPLEX</th><th>Status / FTU-locatie</th><th>FTU type</th><th>Demping 1A</th><th>Demping 1Z</th><th>Demping 2A</th><th>Demping 2Z</th><th></th></tr></thead>
+              <tbody id="selectedRows"><tr><td colspan="11" class="empty-cell">Todavía no hay conexiones seleccionadas.</td></tr></tbody>
+            </table>
+            <datalist id="ftuTypeOptions"></datalist>
+          </div>
+          <div class="generate-bar">
+            <div><strong>El origen no se modifica.</strong><span>Se crea una carpeta nueva y una copia completa del MDB en Back. El DWG se copia entero; Crc, Email y Routes quedan para el programa externo.</span></div>
+            <button id="generateButton" class="button primary" type="button">Generar Partial Delivery</button>
+            <button id="openOutputButton" class="button tertiary" type="button" disabled>Abrir salida</button>
+          </div>
+        </section>
+
+        <section class="panel partial-log-panel">
+          <div class="panel-head"><div><p class="panel-kicker">Ejecución</p><h2>Actividad</h2></div></div>
+          <div id="logOutput" class="log-output" aria-live="polite"></div>
+        </section>
+      </main>
+    </div>
+    <script src="./partial-delivery.js"></script>
+  </body>
+</html>

@@ -13,6 +13,10 @@ contextBridge.exposeInMainWorld('fiberApp', {
   adjustConnections: (payload) => ipcRenderer.invoke('mdb:adjust-connections', payload),
   fixCustomerDempings: (payload) => ipcRenderer.invoke('mdb:fix-customer-dempings', payload),
   updateFc: (payload) => ipcRenderer.invoke('mdb:update-fc', payload),
+  openPartialDeliveryWindow: (payload) => ipcRenderer.invoke('partial-delivery:open-window', payload),
+  loadPartialDeliveryProject: (payload) => ipcRenderer.invoke('partial-delivery:load-project', payload),
+  readPartialDeliveryList: (payload) => ipcRenderer.invoke('partial-delivery:read-list', payload),
+  generatePartialDelivery: (payload) => ipcRenderer.invoke('partial-delivery:generate', payload),
   openRiserWindow: (payload) => ipcRenderer.invoke('riser:open-window', payload),
   loadRiserData: (payload) => ipcRenderer.invoke('riser:load-data', payload),
   applyRiserData: (payload) => ipcRenderer.invoke('mdb:apply-riser-data', payload),
@@ -43,5 +47,10 @@ contextBridge.exposeInMainWorld('fiberApp', {
     return () => {
       ipcRenderer.removeListener('generation:event', listener);
     };
+  },
+  onPartialDeliveryEvent: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('partial-delivery:event', listener);
+    return () => ipcRenderer.removeListener('partial-delivery:event', listener);
   }
 });

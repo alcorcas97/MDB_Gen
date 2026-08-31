@@ -12,6 +12,7 @@ const elements = {
   browseOutputButton: document.getElementById('browseOutputButton'),
   generateButton: document.getElementById('generateButton'),
   generateCrossCheckButton: document.getElementById('generateCrossCheckButton'),
+  partialDeliveryButton: document.getElementById('partialDeliveryButton'),
   inspectConnectionBalanceButton: document.getElementById('inspectConnectionBalanceButton'),
   adjustConnectionsButton: document.getElementById('adjustConnectionsButton'),
   fixCustomerDempingsButton: document.getElementById('fixCustomerDempingsButton'),
@@ -136,6 +137,7 @@ function setRunningState(running, cancelAvailable = false) {
     elements.browseOutputButton,
     elements.generateButton,
     elements.generateCrossCheckButton,
+    elements.partialDeliveryButton,
     elements.inspectConnectionBalanceButton,
     elements.adjustConnectionsButton,
     elements.fixCustomerDempingsButton,
@@ -918,6 +920,20 @@ async function applyGlaspoortProject() {
   }
 }
 
+async function openPartialDeliveryWindow() {
+  try {
+    await fiberDesktopApi.openPartialDeliveryWindow({
+      projectFolderPath: elements.projectFolderPath.value.trim()
+    });
+    appendLog('Ventana Partial Delivery abierta.', 'meta');
+  }
+  catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setStatus(message, 'error');
+    appendLog(message, 'error');
+  }
+}
+
 async function openRiserWindow() {
   if (!fiberDesktopApi) {
     setStatus('La integracion de escritorio no se ha cargado. No se puede abrir Riser.', 'error');
@@ -1254,6 +1270,10 @@ elements.updateFcButton.addEventListener('click', () => {
 
 elements.riserButton.addEventListener('click', () => {
   void openRiserWindow();
+});
+
+elements.partialDeliveryButton.addEventListener('click', () => {
+  void openPartialDeliveryWindow();
 });
 
 elements.createBuiseindButton.addEventListener('click', () => {

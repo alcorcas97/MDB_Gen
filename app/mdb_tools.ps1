@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('ExportCustomerDrawData', 'ImportCustomerCoordinates', 'ExportDpCoordinateTargets', 'ImportDpCoordinates', 'MoveResvCoordinatesToDp', 'SetOapCoordinate', 'ExportCrossCheckData', 'FixCustomerDempingValues', 'ApplyDempingContingency', 'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh', 'ApplyGlaspoortProject', 'InspectConnectionBalance', 'ApplyConnectionSync', 'ExportRiserState', 'ApplyRiserData', 'AddRiserData', 'DeleteRiserData', 'ApplyBuiseind')]
+    [ValidateSet('ExportCustomerDrawData', 'ImportCustomerCoordinates', 'ExportDpCoordinateTargets', 'ImportDpCoordinates', 'MoveResvCoordinatesToDp', 'SetOapCoordinate', 'ExportCrossCheckData', 'FixCustomerDempingValues', 'ApplyDempingContingency', 'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh', 'ApplyGlaspoortProject', 'InspectConnectionBalance', 'ApplyConnectionSync', 'ExportRiserState', 'ApplyRiserData', 'AddRiserData', 'DeleteRiserData', 'ApplyBuiseind', 'ExportPartialDeliveryData', 'ApplyPartialDelivery')]
     [string]$Mode,
 
     [Parameter(Mandatory = $true)]
@@ -2796,6 +2796,223 @@ function Export-CrossCheckData {
     }
 }
 
+function Export-PartialDeliveryData {
+    param([__ComObject]$Database)
+
+    $customerRows = @(Get-TableRows -Database $Database -TableName 'Klant')
+    $cableRows = @(Get-TableRows -Database $Database -TableName 'Kabel')
+    $cableLookup = @{}
+    foreach ($row in $cableRows) {
+        $label = Normalize-Text $row.Label
+        if ($null -ne $label) {
+            $cableLookup[$label.ToUpperInvariant()] = $row
+        }
+    }
+
+    $connections = @()
+    foreach ($customer in $customerRows) {
+        $kabelId = Normalize-Text $customer.Kabel
+        if ($null -eq $kabelId) { continue }
+        $cable = $cableLookup[$kabelId.ToUpperInvariant()]
+        $connections += [pscustomobject]@{
+            id          = $customer.ID
+            kabelId     = $kabelId
+            phkt        = if ($null -ne $cable) { Normalize-Text $cable.Locatienaam_B } else { $null }
+            postcode    = Normalize-Text $customer.Postcode
+            houseNumber = Normalize-Text $customer.Huisnr
+            houseSuffix = Normalize-Text $customer.Toevoeging
+            room        = Normalize-Text $customer.KAMER
+            complex     = Normalize-Text $customer.COMPLEX
+            dpLabel     = if ($null -ne $cable) { Normalize-Text $cable.Locatienaam_A } else { $null }
+            kastnr      = Normalize-Text $customer.Kastnr
+            ftuType     = Normalize-Text $customer.FTUType
+            demping1A   = Convert-ToNullableDouble $customer.Dempingswaarde1A
+            demping1Z   = Convert-ToNullableDouble $customer.Dempingswaarde1Z
+            demping2A   = Convert-ToNullableDouble $customer.Dempingswaarde2A
+            demping2Z   = Convert-ToNullableDouble $customer.Dempingswaarde2Z
+        }
+    }
+
+    return [pscustomobject]@{
+        connections = @($connections | Sort-Object postcode, houseNumber, houseSuffix, room, kabelId)
+        totalConnections = $connections.Count
+        totalComplexes = @($connections | ForEach-Object { $_.complex } | Where-Object { $null -ne $_ } | Sort-Object -Unique).Count
+    }
+}
+
+function Test-ContiguousTableIds {
+    param(
+        [__ComObject]$Database,
+        [string]$TableName
+    )
+
+    $rows = @(Get-TableRows -Database $Database -TableName $TableName)
+    $ids = @($rows | ForEach-Object { [int]$_.ID } | Sort-Object)
+    $isContiguous = $true
+    for ($index = 0; $index -lt $ids.Count; $index++) {
+        if ($ids[$index] -ne ($index + 1)) {
+            $isContiguous = $false
+            break
+        }
+    }
+
+    return [pscustomobject]@{
+        table = $TableName
+        count = $ids.Count
+        firstId = if ($ids.Count -gt 0) { $ids[0] } else { $null }
+        lastId = if ($ids.Count -gt 0) { $ids[-1] } else { $null }
+        contiguousFromOne = $isContiguous
+    }
+}
+
+function Apply-PartialDelivery {
+    param(
+        [__ComObject]$Database,
+        [string]$Path
+    )
+
+    $selection = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $connectionEdits = @()
+    if ($selection.PSObject.Properties.Name -contains 'connections') {
+        $connectionEdits = @($selection.connections)
+    }
+    $requestedCableIds = if ($connectionEdits.Count -gt 0) {
+        @($connectionEdits | ForEach-Object { Normalize-Text $_.kabelId } | Where-Object { $null -ne $_ })
+    }
+    else {
+        @($selection.cableIds | ForEach-Object { Normalize-Text $_ } | Where-Object { $null -ne $_ })
+    }
+    if ($requestedCableIds.Count -eq 0) {
+        throw 'No hay conexiones seleccionadas para el Partial Delivery.'
+    }
+
+    $requestedSet = @{}
+    foreach ($cableId in $requestedCableIds) {
+        $requestedSet[$cableId.ToUpperInvariant()] = $cableId
+    }
+
+    $allCustomers = @(Get-TableRows -Database $Database -TableName 'Klant')
+    $allCables = @(Get-TableRows -Database $Database -TableName 'Kabel')
+    $allLas = @(Get-TableRows -Database $Database -TableName 'Las')
+    $allAccesspoints = @(Get-TableRows -Database $Database -TableName 'Accesspoint')
+    $allSpliceBoxes = @(Get-TableRows -Database $Database -TableName 'SpliceBox')
+    $allSettings = @(Get-TableRows -Database $Database -TableName 'Instellingen')
+
+    $selectedCustomers = @($allCustomers | Where-Object {
+        $cableId = Normalize-Text $_.Kabel
+        $null -ne $cableId -and $requestedSet.ContainsKey($cableId.ToUpperInvariant())
+    } | Sort-Object ID)
+    if ($selectedCustomers.Count -ne $requestedSet.Count) {
+        $found = @{}
+        foreach ($row in $selectedCustomers) { $found[(Normalize-Text $row.Kabel).ToUpperInvariant()] = $true }
+        $missing = @($requestedSet.Keys | Where-Object { -not $found.ContainsKey($_) } | Sort-Object)
+        throw "No se han encontrado todas las conexiones en Klant: $($missing -join ', ')."
+    }
+
+    $editLookup = @{}
+    foreach ($edit in $connectionEdits) {
+        $editCableId = Normalize-Text $edit.kabelId
+        if ($null -ne $editCableId) { $editLookup[$editCableId.ToUpperInvariant()] = $edit }
+    }
+    foreach ($customer in $selectedCustomers) {
+        $customerCableId = Normalize-Text $customer.Kabel
+        if ($null -eq $customerCableId -or -not $editLookup.ContainsKey($customerCableId.ToUpperInvariant())) { continue }
+        $edit = $editLookup[$customerCableId.ToUpperInvariant()]
+        if ($edit.PSObject.Properties.Name -contains 'status') { $customer.Kastnr = Normalize-UpperStatus $edit.status }
+        if ($edit.PSObject.Properties.Name -contains 'ftuType') { $customer.FTUType = Normalize-Text $edit.ftuType }
+        foreach ($mapping in @(
+            @{ Json = 'demping1A'; Field = 'Dempingswaarde1A' },
+            @{ Json = 'demping1Z'; Field = 'Dempingswaarde1Z' },
+            @{ Json = 'demping2A'; Field = 'Dempingswaarde2A' },
+            @{ Json = 'demping2Z'; Field = 'Dempingswaarde2Z' }
+        )) {
+            if ($edit.PSObject.Properties.Name -contains $mapping.Json) {
+                $customer.($mapping.Field) = Convert-ToNullableDouble $edit.($mapping.Json)
+            }
+        }
+    }
+
+    $selectedCustomerCableSet = @{}
+    foreach ($row in $selectedCustomers) {
+        $selectedCustomerCableSet[(Normalize-Text $row.Kabel).ToUpperInvariant()] = $true
+    }
+
+    $customerCables = @($allCables | Where-Object {
+        $label = Normalize-Text $_.Label
+        $null -ne $label -and $selectedCustomerCableSet.ContainsKey($label.ToUpperInvariant())
+    })
+    $dpSet = @{}
+    foreach ($row in $customerCables) {
+        $dp = Normalize-Text $row.Locatienaam_A
+        if ($null -ne $dp) { $dpSet[$dp.ToUpperInvariant()] = $dp }
+    }
+
+    $feederCables = @($allCables | Where-Object {
+        $label = Normalize-Text $_.Label
+        if ($null -ne $label -and $selectedCustomerCableSet.ContainsKey($label.ToUpperInvariant())) { return $false }
+        $locationB = Normalize-Text $_.Locatienaam_B
+        $terminationB = Normalize-Text $_.Afwerkeenheid_B
+        ($null -ne $locationB -and $dpSet.ContainsKey($locationB.ToUpperInvariant())) -or
+        ($null -ne $terminationB -and $dpSet.ContainsKey($terminationB.ToUpperInvariant()))
+    } | Sort-Object ID)
+    $targetCables = @($feederCables + @($customerCables | Sort-Object ID))
+
+    $targetAccesspoints = @($allAccesspoints | Where-Object {
+        $label = Normalize-Text $_.Label
+        $null -ne $label -and $dpSet.ContainsKey($label.ToUpperInvariant())
+    } | Sort-Object ID)
+    $targetSpliceBoxes = @($allSpliceBoxes | Where-Object {
+        $label = Normalize-Text $_.Label
+        $null -ne $label -and $dpSet.ContainsKey($label.ToUpperInvariant())
+    } | Sort-Object ID)
+    $targetLas = @($allLas | Where-Object {
+        $cableA = Normalize-Text $_.KabelA
+        $cableB = Normalize-Text $_.KabelB
+        ($null -ne $cableA -and $selectedCustomerCableSet.ContainsKey($cableA.ToUpperInvariant())) -or
+        ($null -ne $cableB -and $selectedCustomerCableSet.ContainsKey($cableB.ToUpperInvariant()))
+    } | Sort-Object ID)
+
+    $emailSetting = @($allSettings | Where-Object { (Normalize-Text $_.NAAM) -eq 'email' } | Select-Object -First 1)
+    $targetSettings = @()
+    if ($emailSetting.Count -gt 0) {
+        $targetSettings += [pscustomobject]@{ NAAM = 'email'; WAARDE = Normalize-Text $emailSetting[0].WAARDE }
+    }
+    $targetSettings += [pscustomobject]@{ NAAM = 'Dataset'; WAARDE = 'PARTIAL' }
+
+    $clearOrder = @(
+        'Ductlas', 'Patch', 'Las', 'Klant', 'Kabel', 'Duct', 'Traject', 'SpliceBox', 'Accesspoint',
+        'AfwerkODF', 'ODF', 'CBN', 'Mantelbuis', 'POP', 'Vergunning', 'Type', 'Instellingen'
+    )
+    Clear-AccessTables -Database $Database -TableNames $clearOrder
+
+    Write-AccessTable -Database $Database -TableName 'Instellingen' -Rows $targetSettings
+    Write-AccessTable -Database $Database -TableName 'Accesspoint' -Rows $targetAccesspoints
+    Write-AccessTable -Database $Database -TableName 'SpliceBox' -Rows $targetSpliceBoxes
+    Write-AccessTable -Database $Database -TableName 'Kabel' -Rows $targetCables
+    Write-AccessTable -Database $Database -TableName 'Klant' -Rows $selectedCustomers
+    Write-AccessTable -Database $Database -TableName 'Las' -Rows $targetLas
+
+    $idChecks = @('Instellingen', 'Accesspoint', 'SpliceBox', 'Kabel', 'Klant', 'Las') |
+        ForEach-Object { Test-ContiguousTableIds -Database $Database -TableName $_ }
+    $failedIdChecks = @($idChecks | Where-Object { -not $_.contiguousFromOne })
+    if ($failedIdChecks.Count -gt 0) {
+        throw "Las IDs no son consecutivas desde 1 en: $(@($failedIdChecks.table) -join ', ')."
+    }
+
+    return [pscustomobject]@{
+        customers = $selectedCustomers.Count
+        customerCables = $customerCables.Count
+        feederCables = $feederCables.Count
+        cables = $targetCables.Count
+        las = $targetLas.Count
+        accesspoints = $targetAccesspoints.Count
+        spliceBoxes = $targetSpliceBoxes.Count
+        dpLabels = @($dpSet.Values | Sort-Object)
+        complexes = @($selectedCustomers | ForEach-Object { Normalize-Text $_.COMPLEX } | Where-Object { $null -ne $_ } | Sort-Object -Unique)
+        idChecks = $idChecks
+    }
+}
+
 $context = Open-Database -Path $MdbPath
 $compactAfterClose = (
     $context.Mode -eq 'Dao' -and
@@ -2804,7 +3021,7 @@ $compactAfterClose = (
         'SetOapCoordinate', 'FixCustomerDempingValues', 'ApplyDempingContingency',
         'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh',
         'ApplyGlaspoortProject', 'ApplyConnectionSync', 'ApplyRiserData',
-        'AddRiserData', 'DeleteRiserData', 'ApplyBuiseind'
+        'AddRiserData', 'DeleteRiserData', 'ApplyBuiseind', 'ApplyPartialDelivery'
     )
 )
 
@@ -2842,6 +3059,16 @@ try {
 
         'ExportCrossCheckData' {
             Export-CrossCheckData -Database $context.Database | ConvertTo-Json -Depth 8
+            break
+        }
+
+        'ExportPartialDeliveryData' {
+            Export-PartialDeliveryData -Database $context.Database | ConvertTo-Json -Depth 6
+            break
+        }
+
+        'ApplyPartialDelivery' {
+            Apply-PartialDelivery -Database $context.Database -Path $AssignmentsPath | ConvertTo-Json -Depth 6
             break
         }
 

@@ -1,0 +1,40 @@
+.partial-shell { min-height: 100vh; }
+.partial-hero { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(360px, .8fr); gap: 18px; padding: 20px; margin-bottom: 22px; border: 1px solid var(--line); border-radius: var(--radius-xl); background: linear-gradient(145deg, rgba(23, 44, 49, .9), rgba(9, 18, 24, .82)), var(--panel); box-shadow: var(--shadow-soft); }
+.hero-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.hero-card { display: grid; gap: 7px; padding: 15px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: rgba(9, 18, 22, .68); box-shadow: var(--shadow-card); }
+.hero-card span { color: var(--quiet); font-size: .72rem; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
+.hero-card strong { color: var(--ink); font-size: 1.35rem; }
+.partial-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
+.partial-source-panel .field + .field { margin-top: 12px; }
+.complex-toggle { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; margin-bottom: 16px; border: 1px solid rgba(95, 75, 48, .2); border-radius: 14px; background: #fff9eb; color: #342f2a; cursor: pointer; }
+.complex-toggle input { width: 20px; height: 20px; margin-top: 2px; accent-color: #c3682e; }
+.complex-toggle span { display: grid; gap: 3px; }
+.complex-toggle strong { color: #342f2a; }
+.complex-toggle small, .helper-text { color: #766b5e; }
+.picker-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(360px, .75fr); gap: 18px; }
+.picker-block { min-width: 0; }
+textarea { width: 100%; resize: vertical; min-height: 124px; border: 1px solid rgba(95, 75, 48, .24); border-radius: 12px; padding: 12px; font: inherit; color: #342f2a; background: #fffefb; }
+.inline-actions { display: flex; gap: 10px; margin-top: 10px; }
+.search-results { max-height: 310px; overflow: auto; margin-top: 9px; border: 1px solid rgba(95, 75, 48, .18); border-radius: 12px; background: #fffefb; }
+.search-result { width: 100%; display: grid; grid-template-columns: minmax(180px, .8fr) minmax(220px, 1fr) auto; gap: 12px; align-items: center; padding: 11px 13px; border: 0; border-bottom: 1px solid rgba(95, 75, 48, .12); text-align: left; background: transparent; cursor: pointer; color: #342f2a; }
+.search-result:last-child { border-bottom: 0; }
+.search-result:hover { background: #fff1d2; }
+.search-result strong, .search-result span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-result small { color: #817567; }
+.search-empty { padding: 20px; text-align: center; color: #817567; }
+.selected-table-wrap { max-height: 410px; overflow: auto; border: 1px solid rgba(95, 75, 48, .18); border-radius: 14px; }
+.selected-table { width: 100%; min-width: 1550px; border-collapse: collapse; font-size: 13px; }
+.selected-table th { position: sticky; top: 0; z-index: 1; background: #4b443b; color: #fff; text-align: left; padding: 10px 12px; }
+.selected-table td { padding: 9px 12px; border-bottom: 1px solid rgba(95, 75, 48, .12); vertical-align: middle; }
+.selected-table tr:last-child td { border-bottom: 0; }
+.selected-table tbody tr:hover { background: #fff9eb; }
+.selected-table .connection-edit { min-width: 92px; padding: 8px 9px; border: 1px solid rgba(95, 75, 48, .24); border-radius: 9px; background: #fff; color: #342f2a; font: inherit; }
+.selected-table .ftu-edit { min-width: 125px; }
+.selected-table .demping-edit { width: 88px; min-width: 88px; }
+.empty-cell { text-align: center; color: #817567; padding: 28px !important; }
+.remove-connection { border: 0; background: #f7ded7; color: #8e3021; border-radius: 999px; width: 28px; height: 28px; cursor: pointer; font-weight: 800; }
+.generate-bar { display: flex; gap: 12px; align-items: center; margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(95, 75, 48, .16); }
+.generate-bar > div { display: grid; flex: 1; gap: 3px; }
+.generate-bar span { color: #766b5e; font-size: 13px; }
+.partial-log-panel .log-output { min-height: 130px; max-height: 260px; }
+@media (max-width: 1050px) { .partial-hero, .picker-grid { grid-template-columns: 1fr; } .generate-bar { align-items: stretch; flex-direction: column; } }
