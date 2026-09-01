@@ -223,7 +223,7 @@ async function generate() {
         demping1A: normalizeDemping(item.demping1A), demping1Z: normalizeDemping(item.demping1Z),
         demping2A: normalizeDemping(item.demping2A), demping2Z: normalizeDemping(item.demping2Z),
         postcode: item.postcode, houseNumber: item.houseNumber, houseSuffix: item.houseSuffix, room: item.room,
-        complex: item.complex ?? null, dpLabel: item.dpLabel ?? null, statusCode: item.bcStatusCode ?? null,
+        complex: item.complex ?? null, dpLabel: item.dpLabel ?? null, kabelType: item.kabelType ?? null, statusCode: item.bcStatusCode ?? null,
         fiber: item.fiber ?? item.bcFiber ?? null, cassette: item.cassette ?? null, cassettePosition: item.cassettePosition ?? null,
         parkingCassette: item.parkingCassette ?? null, parkingPosition: item.parkingPosition ?? null,
         odf: item.bcOdf ?? null, strengId: item.bcStrengId ?? null, buildingType: item.buildingType ?? null

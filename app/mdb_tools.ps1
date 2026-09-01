@@ -2911,6 +2911,7 @@ function Export-PartialDeliveryData {
             room        = Normalize-Text $customer.KAMER
             complex     = Normalize-Text $customer.COMPLEX
             dpLabel     = if ($null -ne $cable) { Normalize-Text $cable.Locatienaam_A } else { $null }
+            kabelType   = if ($null -ne $cable) { Normalize-Text $cable.Kabeltype } else { $null }
             kastnr      = Normalize-Text $customer.Kastnr
             ftuType     = Normalize-Text $customer.FTUType
             demping1A   = Convert-ToDempingText $customer.Dempingswaarde1A
@@ -3102,6 +3103,9 @@ function Apply-PartialDelivery {
 
         $cable = @($allCables | Where-Object { $label = Normalize-Text $_.Label; $null -ne $label -and $label.ToUpperInvariant() -eq $customerCableId.ToUpperInvariant() } | Select-Object -First 1)
         if (@($cable).Count -gt 0) {
+            if ($edit.PSObject.Properties.Name -contains 'kabelType') {
+                $cable[0].Kabeltype = Normalize-Text $edit.kabelType
+            }
             $termination = Normalize-UpperStatus $customer.Kastnr
             $cable[0].Afwerkeenheid_B = if ($termination -in @('MTK', 'WNK', 'ANDE', 'KLDR')) { $termination } else { $null }
         }

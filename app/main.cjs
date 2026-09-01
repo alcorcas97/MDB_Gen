@@ -1877,6 +1877,7 @@ async function generatePartialDelivery(payload) {
         demping2A: item.demping2A ?? null, demping2Z: item.demping2Z ?? null,
         postcode: item.postcode ?? null, houseNumber: item.houseNumber ?? null, houseSuffix: item.houseSuffix ?? null,
         room: item.room ?? null, complex: item.complex ?? null, dpLabel: item.dpLabel ?? null, statusCode: null,
+        kabelType: item.kabelType ?? null,
         fiber: item.fiber ?? null, cassette: item.cassette ?? null, cassettePosition: item.cassettePosition ?? null,
         parkingCassette: item.parkingCassette ?? null, parkingPosition: item.parkingPosition ?? null,
         odf: null, strengId: null, buildingType: null
