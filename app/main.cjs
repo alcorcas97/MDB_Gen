@@ -1961,6 +1961,10 @@ async function generatePartialDelivery(payload) {
   }
   catch (error) {
     await fsp.rm(tempProjectPath, { recursive: true, force: true }).catch(() => {});
+    if (previousProjectBackupPath && await pathExists(previousProjectBackupPath) && !(await pathExists(targetProjectPath))) {
+      await fsp.rename(previousProjectBackupPath, targetProjectPath).catch(() => {});
+      sendPartialDeliveryEvent({ stage: 'restore', message: 'La regeneracion fallo y se ha restaurado automaticamente el Partial Delivery anterior.' });
+    }
     throw error;
   }
   finally {

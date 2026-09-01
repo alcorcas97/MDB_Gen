@@ -1944,7 +1944,39 @@ function Get-ProjectLabelFromDatabase {
         [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($recordset)
     }
 
-    throw 'No se ha podido resolver el Label del proyecto desde la tabla POP.'
+    foreach ($lookup in @(
+        @{ Table = 'Kabel'; Fields = @('Locatienaam_A', 'Afwerkeenheid_A', 'Label') },
+        @{ Table = 'Accesspoint'; Fields = @('Label') },
+        @{ Table = 'SpliceBox'; Fields = @('Label') },
+        @{ Table = 'Las'; Fields = @('LOCATIE', 'SPLICEBOX', 'KabelA', 'KabelB') }
+    )) {
+        foreach ($fieldName in $lookup.Fields) {
+            $fallbackRecordset = $null
+            try {
+                $fallbackRecordset = $Database.OpenRecordset("SELECT TOP 50 [$fieldName] FROM [$($lookup.Table)] WHERE [$fieldName] Is Not Null")
+                while (-not $fallbackRecordset.EOF) {
+                    $candidate = Normalize-Text $fallbackRecordset.Fields($fieldName).Value
+                    if ($null -ne $candidate) {
+                        $candidate = $candidate -replace '^(?i:K-)', ''
+                        $match = [regex]::Match($candidate, '^(.+?)-(?:O?DP\d+|B\d+|T\d+)(?:-|$)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+                        if ($match.Success) { return $match.Groups[1].Value }
+                    }
+                    $fallbackRecordset.MoveNext()
+                }
+            }
+            catch {
+                continue
+            }
+            finally {
+                if ($null -ne $fallbackRecordset) {
+                    $fallbackRecordset.Close()
+                    [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($fallbackRecordset)
+                }
+            }
+        }
+    }
+
+    throw 'No se ha podido resolver el Label del proyecto desde POP, Kabel, Accesspoint, SpliceBox ni Las.'
 }
 
 function Convert-ToAccessNumberLiteral {
