@@ -7,7 +7,8 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   buildNextPartialProjectName,
-  parseBcCsv
+  parseBcCsv,
+  parseFcRows
 } = require('./lib/partial-delivery.cjs');
 
 const appRoot = path.resolve(__dirname, '..');
@@ -2442,6 +2443,15 @@ ipcMain.handle('partial-delivery:read-bc', async (_event, payload) => {
     throw new Error('Selecciona un fichero CSV de BC valido.');
   }
   return { filePath, rows: parseBcCsv(await fsp.readFile(filePath, 'utf8')) };
+});
+
+ipcMain.handle('partial-delivery:read-fc', async (_event, payload) => {
+  const filePath = path.resolve(String(payload?.filePath ?? '').trim());
+  if (!String(payload?.filePath ?? '').trim() || !['.xlsx', '.xlsm', '.xls'].includes(path.extname(filePath).toLowerCase())) {
+    throw new Error('Selecciona un fichero Excel de FC valido.');
+  }
+  const rows = await getCrossCheckToolsModule().readFcRows(filePath);
+  return { filePath, rows: parseFcRows(rows) };
 });
 
 ipcMain.handle('partial-delivery:generate', async (_event, payload) => generatePartialDelivery(payload));

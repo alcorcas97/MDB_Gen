@@ -7,7 +7,7 @@ const elements = {
   availableCount: document.getElementById('availableCount'), selectedCount: document.getElementById('selectedCount'), complexCount: document.getElementById('complexCount'),
   expandComplexInput: document.getElementById('expandComplexInput'), searchInput: document.getElementById('searchInput'), searchResults: document.getElementById('searchResults'),
   manualInput: document.getElementById('manualInput'), addManualButton: document.getElementById('addManualButton'), importTxtButton: document.getElementById('importTxtButton'),
-  importBcButton: document.getElementById('importBcButton'),
+  importBcButton: document.getElementById('importBcButton'), importFcButton: document.getElementById('importFcButton'),
   importSummary: document.getElementById('importSummary'), selectedRows: document.getElementById('selectedRows'), clearSelectionButton: document.getElementById('clearSelectionButton'),
   ftuTypeOptions: document.getElementById('ftuTypeOptions'), generateButton: document.getElementById('generateButton'), openOutputButton: document.getElementById('openOutputButton'),
   drawCoordinatesButton: document.getElementById('drawCoordinatesButton'), clearCoordinatesButton: document.getElementById('clearCoordinatesButton'), extractCoordinatesButton: document.getElementById('extractCoordinatesButton'), logOutput: document.getElementById('logOutput')
@@ -17,7 +17,7 @@ const state = { connections: [], selected: new Map(), loadedSource: '', running:
 function normalize(value) { return String(value ?? '').replace(/[\u00A0\u202F]/g, ' ').trim(); }
 function key(value) { return normalize(value).replace(/\s+/g, '').toUpperCase().replace(/^K-/, ''); }
 function addressKey(value) { return normalize(value).replace(/[^A-Z0-9]/gi, '').toUpperCase(); }
-function parseDecimal(value) { const text = normalize(value).replace(',', '.'); if (!text) return null; const parsed = Number(text); return Number.isFinite(parsed) ? parsed : null; }
+function normalizeDemping(value) { const text = normalize(value); return text ? text.replace(/\./g, ',') : null; }
 function basename(value) { const text = normalize(value); const index = Math.max(text.lastIndexOf('\\'), text.lastIndexOf('/')); return index >= 0 ? text.slice(index + 1) : text; }
 function dirname(value) { const text = normalize(value); const index = Math.max(text.lastIndexOf('\\'), text.lastIndexOf('/')); return index >= 0 ? text.slice(0, index) : ''; }
 function joinPath(parent, child) { return `${normalize(parent).replace(/[\\/]+$/, '')}\\${normalize(child).replace(/^[\\/]+/, '')}`; }
@@ -26,7 +26,7 @@ function searchable(item) { return [item.kabelId, item.phkt, formatAddress(item)
 function parseIdentifiers(text) { const seen = new Set(); return String(text ?? '').replace(/^\uFEFF/, '').split(/[\r\n;,]+/).map(normalize).filter((item) => { const id = key(item); if (!id || seen.has(id)) return false; seen.add(id); return true; }); }
 function setStatus(message, tone = 'neutral') { elements.statusBanner.textContent = message; elements.statusBanner.dataset.tone = tone; }
 function appendLog(message, tone = 'info') { for (const line of String(message ?? '').replace(/\r/g, '').split('\n').filter(Boolean)) { const row = document.createElement('div'); row.className = `log-line ${tone}`; row.textContent = `[${new Date().toLocaleTimeString('es-ES')}] ${line}`; elements.logOutput.append(row); } elements.logOutput.scrollTop = elements.logOutput.scrollHeight; }
-function setBusy(running) { state.running = running; for (const element of [elements.sourceProjectPath, elements.targetProjectPath, elements.backupFolderPath, elements.uppercaseOapInput, elements.browseSourceButton, elements.browseTargetButton, elements.browseBackupButton, elements.reloadButton, elements.expandComplexInput, elements.searchInput, elements.manualInput, elements.addManualButton, elements.importTxtButton, elements.importBcButton, elements.clearSelectionButton, elements.generateButton]) element.disabled = running; for (const element of [elements.drawCoordinatesButton, elements.clearCoordinatesButton, elements.extractCoordinatesButton]) element.disabled = running || !state.lastOutput; elements.openOutputButton.disabled = running || !state.lastOutput; }
+function setBusy(running) { state.running = running; for (const element of [elements.sourceProjectPath, elements.targetProjectPath, elements.backupFolderPath, elements.uppercaseOapInput, elements.browseSourceButton, elements.browseTargetButton, elements.browseBackupButton, elements.reloadButton, elements.expandComplexInput, elements.searchInput, elements.manualInput, elements.addManualButton, elements.importTxtButton, elements.importBcButton, elements.importFcButton, elements.clearSelectionButton, elements.generateButton]) element.disabled = running; for (const element of [elements.drawCoordinatesButton, elements.clearCoordinatesButton, elements.extractCoordinatesButton]) element.disabled = running || !state.lastOutput; elements.openOutputButton.disabled = running || !state.lastOutput; }
 
 function updateStats() {
   elements.availableCount.textContent = String(state.connections.length);
@@ -128,6 +128,24 @@ function mergeBcRows(rows) {
   return { added, enriched };
 }
 
+function mergeFcRows(rows) {
+  let enriched = 0; let unmatched = 0;
+  for (const row of rows ?? []) {
+    const existing = state.connections.find((item) => key(item.kabelId) === key(row.kabelId));
+    if (!existing) { unmatched++; continue; }
+    for (const target of [existing, state.selected.get(key(row.kabelId))].filter(Boolean)) {
+      if (row.ftuLocation) {
+        target.kastnr = normalize(row.ftuLocation).toUpperCase();
+        if (target.kastnr === 'GV') target.ftuType = '';
+      }
+      if (row.measurement) target.demping1A = normalizeDemping(row.measurement);
+    }
+    enriched++;
+  }
+  renderSelected(); renderSearchResults(); updateStats();
+  return { enriched, unmatched };
+}
+
 async function loadProject() {
   const projectFolderPath = normalize(elements.sourceProjectPath.value);
   if (!projectFolderPath) { setStatus('Selecciona la carpeta del proyecto completo.', 'warning'); return; }
@@ -178,6 +196,17 @@ async function importBc() {
   } catch (error) { appendLog(error instanceof Error ? error.message : String(error), 'error'); }
 }
 
+async function importFc() {
+  try {
+    const filePath = await api.openFile({ title: 'Selecciona el Excel de FC', filters: [{ name: 'Excel FC', extensions: ['xlsx', 'xlsm', 'xls'] }] });
+    if (!filePath) return;
+    const result = await api.readPartialDeliveryFc({ filePath });
+    const summary = mergeFcRows(result.rows);
+    elements.importSummary.textContent = `FC importado: ${result.rows.length} filas; ${summary.enriched} conexiones actualizadas.${summary.unmatched ? ` ${summary.unmatched} Kabel ID no existen en el proyecto cargado.` : ''}`;
+    appendLog(`FC importado: ${basename(filePath)}. Actualizadas: ${summary.enriched}; no encontradas: ${summary.unmatched}.`, summary.unmatched ? 'warning' : 'success');
+  } catch (error) { appendLog(error instanceof Error ? error.message : String(error), 'error'); }
+}
+
 async function generate() {
   if (state.selected.size === 0) { setStatus('Selecciona al menos una conexión.', 'warning'); return; }
   setBusy(true); state.lastOutput = null; setStatus('Generando Partial Delivery...', 'neutral');
@@ -191,8 +220,8 @@ async function generate() {
         kabelId: item.kabelId,
         status: normalize(item.kastnr) || null,
         ftuType: normalize(item.ftuType) || null,
-        demping1A: parseDecimal(item.demping1A), demping1Z: parseDecimal(item.demping1Z),
-        demping2A: parseDecimal(item.demping2A), demping2Z: parseDecimal(item.demping2Z),
+        demping1A: normalizeDemping(item.demping1A), demping1Z: normalizeDemping(item.demping1Z),
+        demping2A: normalizeDemping(item.demping2A), demping2Z: normalizeDemping(item.demping2Z),
         postcode: item.postcode, houseNumber: item.houseNumber, houseSuffix: item.houseSuffix, room: item.room,
         complex: item.complex ?? null, dpLabel: item.dpLabel ?? null, statusCode: item.bcStatusCode ?? null,
         fiber: item.fiber ?? item.bcFiber ?? null, cassette: item.cassette ?? null, cassettePosition: item.cassettePosition ?? null,
@@ -244,13 +273,15 @@ elements.searchResults.addEventListener('click', (event) => { const button = eve
 elements.addManualButton.addEventListener('click', () => addIdentifiers(elements.manualInput.value));
 elements.importTxtButton.addEventListener('click', () => void importTxt());
 elements.importBcButton.addEventListener('click', () => void importBc());
+elements.importFcButton.addEventListener('click', () => void importFc());
 elements.selectedRows.addEventListener('click', (event) => { const button = event.target.closest('.remove-connection'); if (!button) return; state.selected.delete(key(button.dataset.cable)); renderSelected(); });
 elements.selectedRows.addEventListener('input', (event) => {
   const input = event.target.closest('.connection-edit'); const row = event.target.closest('[data-connection]');
   if (!input || !row) return;
   const item = state.selected.get(key(row.dataset.connection)); if (!item) return;
   if (input.dataset.field === 'status') { item.kastnr = input.value; if (normalize(input.value).toUpperCase() === 'GV') { item.ftuType = ''; const ftuInput = row.querySelector('[data-field="ftuType"]'); if (ftuInput) ftuInput.value = ''; } }
-  else item[input.dataset.field] = input.dataset.field.startsWith('demping') ? input.value.replace(',', '.') : input.value;
+  else if (input.dataset.field.startsWith('demping')) { input.value = input.value.replace(/\./g, ','); item[input.dataset.field] = input.value; }
+  else item[input.dataset.field] = input.value;
 });
 elements.clearSelectionButton.addEventListener('click', () => { state.selected.clear(); renderSelected(); });
 elements.generateButton.addEventListener('click', () => void generate());

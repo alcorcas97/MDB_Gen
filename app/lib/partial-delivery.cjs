@@ -60,6 +60,30 @@ function parseBcCsv(value) {
   }).filter((row) => row.kabelId);
 }
 
+function parseFcRows(rows) {
+  return (Array.isArray(rows) ? rows : []).map((row) => {
+    const get = (...names) => {
+      for (const name of names) {
+        const value = normalizeText(row?.[name]);
+        if (value) return value;
+      }
+      return null;
+    };
+    const rawCableId = get('Kabel ID', 'KabelID');
+    const kabelId = rawCableId && /^K-/i.test(rawCableId) ? `K-${rawCableId.slice(2)}` : rawCableId ? `K-${rawCableId}` : null;
+    const statusCode = get('Opleverstatus KPN', 'Opleverstatus');
+    const powermeter = get('Powermeter');
+    const ipFiberValue = get('IP vezelwaarde');
+    const measurement = statusCode === '11' ? null : (powermeter || ipFiberValue);
+    return {
+      kabelId,
+      ftuLocation: get('FTU locatie', 'FTU-locatie'),
+      measurement: measurement?.replace(/\./g, ',') ?? null,
+      statusCode
+    };
+  }).filter((row) => row.kabelId);
+}
+
 function getConnectionSearchText(connection) {
   return [
     connection?.kabelId,
@@ -142,5 +166,6 @@ module.exports = {
   normalizeText,
   parseSelectionText,
   parseBcCsv,
+  parseFcRows,
   resolveSelectionIdentifiers
 };

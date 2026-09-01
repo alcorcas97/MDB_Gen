@@ -348,5 +348,6 @@ async function exportCrossCheckWorkbook({
 }
 
 module.exports = {
-  exportCrossCheckWorkbook
+  exportCrossCheckWorkbook,
+  readFcRows
 };

@@ -256,6 +256,14 @@ function Convert-ToNullableDouble {
     return $null
 }
 
+function Convert-ToDempingText {
+    param([object]$Value)
+
+    $text = Normalize-Text $Value
+    if ($null -eq $text) { return $null }
+    return $text.Replace('.', ',')
+}
+
 function Resolve-NormalizedPath {
     param([string]$Path)
 
@@ -2905,10 +2913,10 @@ function Export-PartialDeliveryData {
             dpLabel     = if ($null -ne $cable) { Normalize-Text $cable.Locatienaam_A } else { $null }
             kastnr      = Normalize-Text $customer.Kastnr
             ftuType     = Normalize-Text $customer.FTUType
-            demping1A   = Convert-ToNullableDouble $customer.Dempingswaarde1A
-            demping1Z   = Convert-ToNullableDouble $customer.Dempingswaarde1Z
-            demping2A   = Convert-ToNullableDouble $customer.Dempingswaarde2A
-            demping2Z   = Convert-ToNullableDouble $customer.Dempingswaarde2Z
+            demping1A   = Convert-ToDempingText $customer.Dempingswaarde1A
+            demping1Z   = Convert-ToDempingText $customer.Dempingswaarde1Z
+            demping2A   = Convert-ToDempingText $customer.Dempingswaarde2A
+            demping2Z   = Convert-ToDempingText $customer.Dempingswaarde2Z
             fiber       = if (@($las).Count -gt 0) { [int]$las[0].VezelnrA } else { $null }
             cassette    = if (@($las).Count -gt 0) { [int]$las[0].Cassette } else { $null }
             cassettePosition = if (@($las).Count -gt 0) { [int]$las[0].Positienr } else { $null }
@@ -3011,14 +3019,14 @@ function Apply-PartialDelivery {
         $newCustomer = [pscustomobject]@{
             ID = 0; Postcode = Normalize-Text $edit.postcode; Huisnr = $newHouseNumber; Toevoeging = Normalize-Text $edit.houseSuffix;
             Kastnr = $newStatus; FTUType = if ($newStatus -eq 'GV') { $null } else { Normalize-Text $edit.ftuType }; Kabel = $newCableId; VEZELNR1 = 1;
-            Dempingswaarde1A = Convert-ToNullableDouble $edit.demping1A; Specificatie1A = $null; Dempingswaarde1Z = Convert-ToNullableDouble $edit.demping1Z;
-            Specificatie1Z = $null; Vezelnr2 = $null; Dempingswaarde2A = Convert-ToNullableDouble $edit.demping2A; Specificatie2A = $null;
-            Dempingswaarde2Z = Convert-ToNullableDouble $edit.demping2Z; Specificatie2Z = $null; X = 0; Y = 0; ImportResult = $null;
+            Dempingswaarde1A = Convert-ToDempingText $edit.demping1A; Specificatie1A = $null; Dempingswaarde1Z = Convert-ToDempingText $edit.demping1Z;
+            Specificatie1Z = $null; Vezelnr2 = $null; Dempingswaarde2A = Convert-ToDempingText $edit.demping2A; Specificatie2A = $null;
+            Dempingswaarde2Z = Convert-ToDempingText $edit.demping2Z; Specificatie2Z = $null; X = 0; Y = 0; ImportResult = $null;
             COMPLEX = Normalize-Text $edit.complex; KAMER = Normalize-Text $edit.room; ALIASNAAM = $null; FTU_SERIENUMMER = $null
         }
         $newCable = [pscustomobject]@{
             ID = 0; Label = $newCableId; Kabeltype = '2V_DBC_PR01'; Locatienaam_A = $newDp; Afwerkeenheid_A = $newDp;
-            PoortA = $null; Locatienaam_B = $newAddress; Afwerkeenheid_B = if ((Normalize-Text $edit.statusCode) -eq '2') { $newStatus } else { $null };
+            PoortA = $null; Locatienaam_B = $newAddress; Afwerkeenheid_B = if ($newStatus -in @('MTK', 'WNK', 'ANDE', 'KLDR')) { $newStatus } else { $null };
             PoortB = $null; Serienummer = $null; ImportResult = $null; CATEGORIE = $null
         }
         $selectedCustomers += $newCustomer
@@ -3088,8 +3096,14 @@ function Apply-PartialDelivery {
             @{ Json = 'demping2Z'; Field = 'Dempingswaarde2Z' }
         )) {
             if ($edit.PSObject.Properties.Name -contains $mapping.Json) {
-                $customer.($mapping.Field) = Convert-ToNullableDouble $edit.($mapping.Json)
+                $customer.($mapping.Field) = Convert-ToDempingText $edit.($mapping.Json)
             }
+        }
+
+        $cable = @($allCables | Where-Object { $label = Normalize-Text $_.Label; $null -ne $label -and $label.ToUpperInvariant() -eq $customerCableId.ToUpperInvariant() } | Select-Object -First 1)
+        if (@($cable).Count -gt 0) {
+            $termination = Normalize-UpperStatus $customer.Kastnr
+            $cable[0].Afwerkeenheid_B = if ($termination -in @('MTK', 'WNK', 'ANDE', 'KLDR')) { $termination } else { $null }
         }
     }
 
