@@ -110,13 +110,17 @@ async function loadProject() {
   try {
     const data = await api.loadPartialDeliveryProject({ projectFolderPath });
     state.connections = Array.isArray(data.connections) ? data.connections : [];
-    state.selected.clear(); state.loadedSource = data.sourceProjectPath; state.lastOutput = null;
+    state.selected.clear();
+    for (const item of data.existingConnections ?? []) state.selected.set(key(item.kabelId), { ...item });
+    state.loadedSource = data.sourceProjectPath; state.lastOutput = null;
     elements.sourceProjectPath.value = data.sourceProjectPath;
     elements.targetProjectPath.value = data.targetProjectPath;
     elements.backupFolderPath.value = data.backupFolderPath;
     renderFtuOptions(); renderSelected(); renderSearchResults();
-    setStatus(`${data.totalConnections} conexiones y ${data.totalComplexes} COMPLEX cargados.`, 'success');
+    const existingCount = Array.isArray(data.existingConnections) ? data.existingConnections.length : 0;
+    setStatus(`${data.totalConnections} conexiones disponibles; ${existingCount} ya incluidas en el Partial Delivery existente.`, 'success');
     appendLog(`Proyecto cargado: ${data.sourceProjectPath}`, 'success');
+    if (existingCount) appendLog(`Partial Delivery existente cargado: ${existingCount} conexiones. Las nuevas se añadirán a este total.`, 'success');
   } catch (error) { const message = error instanceof Error ? error.message : String(error); setStatus(message, 'error'); appendLog(message, 'error'); }
   finally { setBusy(false); }
 }
@@ -165,8 +169,10 @@ async function generate() {
         demping1A: parseDecimal(item.demping1A), demping1Z: parseDecimal(item.demping1Z),
         demping2A: parseDecimal(item.demping2A), demping2Z: parseDecimal(item.demping2Z),
         postcode: item.postcode, houseNumber: item.houseNumber, houseSuffix: item.houseSuffix, room: item.room,
-        complex: item.complex, dpLabel: item.dpLabel, statusCode: item.bcStatusCode,
-        fiber: item.bcFiber, odf: item.bcOdf, strengId: item.bcStrengId, buildingType: item.buildingType
+        complex: item.complex ?? null, dpLabel: item.dpLabel ?? null, statusCode: item.bcStatusCode ?? null,
+        fiber: item.fiber ?? item.bcFiber ?? null, cassette: item.cassette ?? null, cassettePosition: item.cassettePosition ?? null,
+        parkingCassette: item.parkingCassette ?? null, parkingPosition: item.parkingPosition ?? null,
+        odf: item.bcOdf ?? null, strengId: item.bcStrengId ?? null, buildingType: item.buildingType ?? null
       }))
     });
     state.lastOutput = result.targetProjectPath;

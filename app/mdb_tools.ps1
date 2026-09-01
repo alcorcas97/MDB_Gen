@@ -2993,7 +2993,7 @@ function Apply-PartialDelivery {
         $allCables += $newCable
         $newConnectionCount++
         $requestedFiber = 0
-        $fiberText = Normalize-Text $edit.fiber
+        $fiberText = if ($edit.PSObject.Properties.Name -contains 'fiber') { Normalize-Text $edit.fiber } else { $null }
         if ($null -ne $fiberText) { [void][int]::TryParse($fiberText, [ref]$requestedFiber) }
         $templateCable = @($allCables | Where-Object { $location = Normalize-Text $_.Locatienaam_A; $label = Normalize-Text $_.Label; $null -ne $location -and $null -ne $label -and $location.ToUpperInvariant() -eq $newDp.ToUpperInvariant() -and $label.ToUpperInvariant() -ne $newCableId.ToUpperInvariant() } | Select-Object -First 1)
         $templateLas = if (@($templateCable).Count -gt 0) { @($allLas | Where-Object { $cableB = Normalize-Text $_.KabelB; $null -ne $cableB -and $cableB.ToUpperInvariant() -eq (Normalize-Text @($templateCable)[0].Label).ToUpperInvariant() } | Sort-Object VezelnrB) } else { @() }
@@ -3015,8 +3015,8 @@ function Apply-PartialDelivery {
             $clone.KabelB = $newCableId; $clone.VezelnrB = 1
             if ($requestedFiber -gt 0) { $clone.VezelnrA = $requestedFiber }
             $requestedCassette = 0; $requestedPosition = 0
-            [void][int]::TryParse((Normalize-Text $edit.cassette), [ref]$requestedCassette)
-            [void][int]::TryParse((Normalize-Text $edit.cassettePosition), [ref]$requestedPosition)
+            if ($edit.PSObject.Properties.Name -contains 'cassette') { [void][int]::TryParse((Normalize-Text $edit.cassette), [ref]$requestedCassette) }
+            if ($edit.PSObject.Properties.Name -contains 'cassettePosition') { [void][int]::TryParse((Normalize-Text $edit.cassettePosition), [ref]$requestedPosition) }
             if ($requestedCassette -gt 0) { $clone.Cassette = $requestedCassette }
             if ($requestedPosition -gt 0) { $clone.Positienr = $requestedPosition }
             $allLas += [pscustomobject]$clone
@@ -3026,8 +3026,8 @@ function Apply-PartialDelivery {
                 foreach ($property in $parkingTemplate[0].PSObject.Properties) { $parkingClone[$property.Name] = $property.Value }
                 $parkingClone.KabelB = $newCableId; $parkingClone.VezelnrB = 2
                 $parkingCassette = 0; $parkingPosition = 0
-                [void][int]::TryParse((Normalize-Text $edit.parkingCassette), [ref]$parkingCassette)
-                [void][int]::TryParse((Normalize-Text $edit.parkingPosition), [ref]$parkingPosition)
+                if ($edit.PSObject.Properties.Name -contains 'parkingCassette') { [void][int]::TryParse((Normalize-Text $edit.parkingCassette), [ref]$parkingCassette) }
+                if ($edit.PSObject.Properties.Name -contains 'parkingPosition') { [void][int]::TryParse((Normalize-Text $edit.parkingPosition), [ref]$parkingPosition) }
                 if ($parkingCassette -gt 0) { $parkingClone.Cassette = $parkingCassette }
                 if ($parkingPosition -gt 0) { $parkingClone.Positienr = $parkingPosition }
                 $allLas += [pscustomobject]$parkingClone
@@ -3065,7 +3065,7 @@ function Apply-PartialDelivery {
     # the source of topology, while BC is authoritative for the customer fibre.
     foreach ($edit in $connectionEdits) {
         $editCableId = Normalize-Text $edit.kabelId
-        $fiberText = Normalize-Text $edit.fiber
+        $fiberText = if ($edit.PSObject.Properties.Name -contains 'fiber') { Normalize-Text $edit.fiber } else { $null }
         $fiber = 0
         if ($null -eq $editCableId -or $null -eq $fiberText -or -not [int]::TryParse($fiberText, [ref]$fiber) -or $fiber -le 0) { continue }
         $lasRows = @($allLas | Where-Object { $cableB = Normalize-Text $_.KabelB; $null -ne $cableB -and $cableB.ToUpperInvariant() -eq $editCableId.ToUpperInvariant() -and (Normalize-Text $_.VezelnrB) -eq '1' })
@@ -3086,15 +3086,15 @@ function Apply-PartialDelivery {
                 $las.Gelast = 'j'
             }
             $cassette = 0; $position = 0
-            [void][int]::TryParse((Normalize-Text $edit.cassette), [ref]$cassette)
-            [void][int]::TryParse((Normalize-Text $edit.cassettePosition), [ref]$position)
+            if ($edit.PSObject.Properties.Name -contains 'cassette') { [void][int]::TryParse((Normalize-Text $edit.cassette), [ref]$cassette) }
+            if ($edit.PSObject.Properties.Name -contains 'cassettePosition') { [void][int]::TryParse((Normalize-Text $edit.cassettePosition), [ref]$position) }
             if ($cassette -gt 0) { $las.Cassette = $cassette }
             if ($position -gt 0) { $las.Positienr = $position }
         }
         $parkingRows = @($allLas | Where-Object { $cableB = Normalize-Text $_.KabelB; $null -ne $cableB -and $cableB.ToUpperInvariant() -eq $editCableId.ToUpperInvariant() -and (Normalize-Text $_.VezelnrB) -eq '2' })
         $parkingCassette = 0; $parkingPosition = 0
-        [void][int]::TryParse((Normalize-Text $edit.parkingCassette), [ref]$parkingCassette)
-        [void][int]::TryParse((Normalize-Text $edit.parkingPosition), [ref]$parkingPosition)
+        if ($edit.PSObject.Properties.Name -contains 'parkingCassette') { [void][int]::TryParse((Normalize-Text $edit.parkingCassette), [ref]$parkingCassette) }
+        if ($edit.PSObject.Properties.Name -contains 'parkingPosition') { [void][int]::TryParse((Normalize-Text $edit.parkingPosition), [ref]$parkingPosition) }
         foreach ($parking in $parkingRows) {
             if ($parkingCassette -gt 0) { $parking.Cassette = $parkingCassette }
             if ($parkingPosition -gt 0) { $parking.Positienr = $parkingPosition }

@@ -1828,11 +1828,23 @@ async function loadPartialDeliveryProject(inputPath) {
   const mdbPath = await resolveProjectWorkingMdbPath(sourceProjectPath);
   const data = await runMdbToolsJson(['-Mode', 'ExportPartialDeliveryData', '-MdbPath', mdbPath]);
   const targetProjectPath = path.join(path.dirname(sourceProjectPath), buildNextPartialProjectName(path.basename(sourceProjectPath)));
+  let existingConnections = [];
+  if (await pathExists(targetProjectPath)) {
+    try {
+      const existingMdbPath = await resolveProjectWorkingMdbPath(targetProjectPath);
+      const existingData = await runMdbToolsJson(['-Mode', 'ExportPartialDeliveryData', '-MdbPath', existingMdbPath]);
+      existingConnections = Array.isArray(existingData?.connections) ? existingData.connections : [];
+    }
+    catch {
+      existingConnections = [];
+    }
+  }
   return {
     ...data,
     sourceProjectPath,
     sourceMdbPath: mdbPath,
     targetProjectPath,
+    existingConnections,
     backupFolderPath: path.join(path.dirname(targetProjectPath), 'Back')
   };
 }
@@ -1850,7 +1862,28 @@ async function generatePartialDelivery(payload) {
     throw new Error('La carpeta de salida no puede contener el origen ni estar dentro de el.');
   }
   const existingTargetProject = await pathExists(targetProjectPath);
-  const connections = (payload?.connections ?? []).filter((item) => String(item?.kabelId ?? '').trim());
+  let connections = (payload?.connections ?? []).filter((item) => String(item?.kabelId ?? '').trim());
+  if (existingTargetProject) {
+    const existingMdbPath = await resolveProjectWorkingMdbPath(targetProjectPath);
+    const existingData = await runMdbToolsJson(['-Mode', 'ExportPartialDeliveryData', '-MdbPath', existingMdbPath]);
+    const merged = new Map();
+    for (const item of existingData?.connections ?? []) {
+      const kabelId = String(item?.kabelId ?? '').trim();
+      if (!kabelId) continue;
+      merged.set(kabelId.toUpperCase(), {
+        kabelId, status: item.kastnr ?? null, ftuType: item.ftuType ?? null,
+        demping1A: item.demping1A ?? null, demping1Z: item.demping1Z ?? null,
+        demping2A: item.demping2A ?? null, demping2Z: item.demping2Z ?? null,
+        postcode: item.postcode ?? null, houseNumber: item.houseNumber ?? null, houseSuffix: item.houseSuffix ?? null,
+        room: item.room ?? null, complex: item.complex ?? null, dpLabel: item.dpLabel ?? null, statusCode: null,
+        fiber: item.fiber ?? null, cassette: item.cassette ?? null, cassettePosition: item.cassettePosition ?? null,
+        parkingCassette: item.parkingCassette ?? null, parkingPosition: item.parkingPosition ?? null,
+        odf: null, strengId: null, buildingType: null
+      });
+    }
+    for (const item of connections) merged.set(String(item.kabelId).trim().toUpperCase(), item);
+    connections = [...merged.values()];
+  }
   const cableIds = [...new Set(connections.map((item) => String(item.kabelId).trim()))];
   if (cableIds.length === 0) throw new Error('Selecciona al menos una conexion.');
 
