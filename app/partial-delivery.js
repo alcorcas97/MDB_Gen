@@ -1,7 +1,7 @@
 const api = window.fiberApp ?? null;
 const elements = {
   sourceProjectPath: document.getElementById('sourceProjectPath'), targetProjectPath: document.getElementById('targetProjectPath'),
-  backupFolderPath: document.getElementById('backupFolderPath'), browseSourceButton: document.getElementById('browseSourceButton'),
+  backupFolderPath: document.getElementById('backupFolderPath'), uppercaseOapInput: document.getElementById('uppercaseOapInput'), browseSourceButton: document.getElementById('browseSourceButton'),
   browseTargetButton: document.getElementById('browseTargetButton'), browseBackupButton: document.getElementById('browseBackupButton'),
   reloadButton: document.getElementById('reloadButton'), statusBanner: document.getElementById('statusBanner'),
   availableCount: document.getElementById('availableCount'), selectedCount: document.getElementById('selectedCount'), complexCount: document.getElementById('complexCount'),
@@ -26,7 +26,7 @@ function searchable(item) { return [item.kabelId, item.phkt, formatAddress(item)
 function parseIdentifiers(text) { const seen = new Set(); return String(text ?? '').replace(/^\uFEFF/, '').split(/[\r\n;,]+/).map(normalize).filter((item) => { const id = key(item); if (!id || seen.has(id)) return false; seen.add(id); return true; }); }
 function setStatus(message, tone = 'neutral') { elements.statusBanner.textContent = message; elements.statusBanner.dataset.tone = tone; }
 function appendLog(message, tone = 'info') { for (const line of String(message ?? '').replace(/\r/g, '').split('\n').filter(Boolean)) { const row = document.createElement('div'); row.className = `log-line ${tone}`; row.textContent = `[${new Date().toLocaleTimeString('es-ES')}] ${line}`; elements.logOutput.append(row); } elements.logOutput.scrollTop = elements.logOutput.scrollHeight; }
-function setBusy(running) { state.running = running; for (const element of [elements.sourceProjectPath, elements.targetProjectPath, elements.backupFolderPath, elements.browseSourceButton, elements.browseTargetButton, elements.browseBackupButton, elements.reloadButton, elements.expandComplexInput, elements.searchInput, elements.manualInput, elements.addManualButton, elements.importTxtButton, elements.importBcButton, elements.clearSelectionButton, elements.generateButton]) element.disabled = running; for (const element of [elements.drawCoordinatesButton, elements.clearCoordinatesButton, elements.extractCoordinatesButton]) element.disabled = running || !state.lastOutput; elements.openOutputButton.disabled = running || !state.lastOutput; }
+function setBusy(running) { state.running = running; for (const element of [elements.sourceProjectPath, elements.targetProjectPath, elements.backupFolderPath, elements.uppercaseOapInput, elements.browseSourceButton, elements.browseTargetButton, elements.browseBackupButton, elements.reloadButton, elements.expandComplexInput, elements.searchInput, elements.manualInput, elements.addManualButton, elements.importTxtButton, elements.importBcButton, elements.clearSelectionButton, elements.generateButton]) element.disabled = running; for (const element of [elements.drawCoordinatesButton, elements.clearCoordinatesButton, elements.extractCoordinatesButton]) element.disabled = running || !state.lastOutput; elements.openOutputButton.disabled = running || !state.lastOutput; }
 
 function updateStats() {
   elements.availableCount.textContent = String(state.connections.length);
@@ -157,6 +157,7 @@ async function generate() {
       sourceProjectPath: state.loadedSource || elements.sourceProjectPath.value,
       targetProjectPath: elements.targetProjectPath.value,
       backupFolderPath: elements.backupFolderPath.value,
+      uppercaseOap: elements.uppercaseOapInput.checked,
       connections: [...state.selected.values()].map((item) => ({
         kabelId: item.kabelId,
         status: normalize(item.kastnr) || null,
@@ -172,6 +173,7 @@ async function generate() {
     setStatus(`Partial Delivery listo: ${result.selectedConnections} conexiones y ${result.buildingCount} COMPLEX.`, 'success');
     appendLog(`Salida: ${result.targetProjectPath}`, 'success');
     appendLog(`Backup MDB completo: ${result.backupMdbPath}`, 'success');
+    if (result.uppercaseOapSummary) appendLog(`OAP mayusculizado: ${result.uppercaseOapSummary.projectLabel} -> ${result.uppercaseOapSummary.uppercaseProjectLabel}.`, 'success');
     if (result.previousProjectBackupPath) appendLog(`Salida anterior guardada en Back: ${result.previousProjectBackupPath}`, 'warning');
     if (result.dwgManualPending) appendLog('Pendiente: editar manualmente la copia del DWG.', 'warning');
     appendLog('Crc, Email y Routes no se han creado ni copiado: los generará el programa externo.', 'info');

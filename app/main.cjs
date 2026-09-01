@@ -1871,6 +1871,7 @@ async function generatePartialDelivery(payload) {
   }
   let backupMdbPath = null;
   let previousProjectBackupPath = null;
+  let uppercaseOapSummary = null;
 
   partialDeliveryRunActive = true;
   try {
@@ -1893,6 +1894,10 @@ async function generatePartialDelivery(payload) {
     const mdbSummary = await runMdbToolsJson([
       '-Mode', 'ApplyPartialDelivery', '-MdbPath', targetMdbPath, '-AssignmentsPath', selectionPath
     ]);
+    if (payload?.uppercaseOap) {
+      sendPartialDeliveryEvent({ stage: 'mdb', message: 'Mayusculizando el OAP del MDB parcial...' });
+      uppercaseOapSummary = await runMdbToolsJson(['-Mode', 'UppercaseOap', '-MdbPath', targetMdbPath]);
+    }
     const buildingSummary = await copySelectedComplexFolders(sourceProjectPath, tempProjectPath, mdbSummary.complexes);
     if (buildingSummary.missing.length > 0) {
       throw new Error(`Faltan carpetas Gebouwen para estos COMPLEX: ${buildingSummary.missing.join(', ')}.`);
@@ -1914,6 +1919,7 @@ async function generatePartialDelivery(payload) {
       targetProjectPath,
       backupMdbPath,
       previousProjectBackupPath,
+      uppercaseOapSummary,
       selectedConnections: cableIds.length,
       buildingCount: buildingSummary.copied.length,
       mdbSummary,

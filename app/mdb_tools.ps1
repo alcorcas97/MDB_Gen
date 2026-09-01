@@ -2834,11 +2834,21 @@ function Export-PartialDeliveryData {
 
     $customerRows = @(Get-TableRows -Database $Database -TableName 'Klant')
     $cableRows = @(Get-TableRows -Database $Database -TableName 'Kabel')
+    $lasRows = @(Get-TableRows -Database $Database -TableName 'Las')
     $cableLookup = @{}
+    $lasLookup = @{}
     foreach ($row in $cableRows) {
         $label = Normalize-Text $row.Label
         if ($null -ne $label) {
             $cableLookup[$label.ToUpperInvariant()] = $row
+        }
+    }
+    foreach ($row in $lasRows) {
+        $lasCableB = Normalize-Text $row.KabelB
+        $lasFiberB = Normalize-Text $row.VezelnrB
+        if ($null -ne $lasCableB -and $null -ne $lasFiberB) {
+            $lasKey = '{0}|{1}' -f $lasCableB.ToUpperInvariant(), $lasFiberB
+            if (-not $lasLookup.ContainsKey($lasKey)) { $lasLookup[$lasKey] = $row }
         }
     }
 
@@ -2847,8 +2857,10 @@ function Export-PartialDeliveryData {
         $kabelId = Normalize-Text $customer.Kabel
         if ($null -eq $kabelId) { continue }
         $cable = $cableLookup[$kabelId.ToUpperInvariant()]
-        $las = @((Get-TableRows -Database $Database -TableName 'Las') | Where-Object { (Normalize-Text $_.KabelB).ToUpperInvariant() -eq $kabelId.ToUpperInvariant() -and (Normalize-Text $_.VezelnrB) -eq '1' } | Select-Object -First 1)
-        $parkingLas = @((Get-TableRows -Database $Database -TableName 'Las') | Where-Object { (Normalize-Text $_.KabelB).ToUpperInvariant() -eq $kabelId.ToUpperInvariant() -and (Normalize-Text $_.VezelnrB) -eq '2' } | Select-Object -First 1)
+        $lasKey = '{0}|1' -f $kabelId.ToUpperInvariant()
+        $parkingLasKey = '{0}|2' -f $kabelId.ToUpperInvariant()
+        $las = if ($lasLookup.ContainsKey($lasKey)) { @($lasLookup[$lasKey]) } else { @() }
+        $parkingLas = if ($lasLookup.ContainsKey($parkingLasKey)) { @($lasLookup[$parkingLasKey]) } else { @() }
         $connections += [pscustomobject]@{
             id          = $customer.ID
             kabelId     = $kabelId
