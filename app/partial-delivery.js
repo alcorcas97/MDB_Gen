@@ -48,6 +48,29 @@ function renderStatusOptions(currentValue) {
   return values.map((value) => `<option value="${escapeHtml(value)}"${value === current ? ' selected' : ''}>${escapeHtml(value || 'Sin status')}</option>`).join('');
 }
 
+function resolveBcStatus(statusCode, currentValue) {
+  const code = normalize(statusCode);
+  const current = normalize(currentValue).toUpperCase();
+  const allowedByCode = {
+    1: ['GV'], 31: ['GV'], 2: ['MTK', 'WNK', 'ANDE', 'KLDR'],
+    5: ['EG', 'GL'], 35: ['EG', 'GL'], 14: ['RESV'], 34: ['RESV'],
+    33: ['IHB'], 11: ['SMK', 'SWON'], 0: [], 30: []
+  };
+  const allowed = allowedByCode[code];
+  if (!allowed) return current;
+  if (allowed.length === 0) return '';
+  if (allowed.length === 1) return allowed[0];
+  return allowed.includes(current) ? current : 'XXXX';
+}
+
+function applyBcRow(target, row) {
+  target.bcStatusCode = row.statusCode; target.bcFiber = row.fiber; target.bcOdf = row.odf; target.bcStrengId = row.strengId;
+  target.kastnr = resolveBcStatus(row.statusCode, target.kastnr);
+  if (target.kastnr === 'GV') target.ftuType = '';
+  else if (row.ftuType) target.ftuType = row.ftuType;
+  if (row.fiber !== null && row.fiber !== undefined && row.fiber !== '') target.fiber = row.fiber;
+}
+
 function renderFtuOptions() {
   const values = [...new Set(state.connections.map((item) => normalize(item.ftuType)).filter(Boolean))].sort();
   elements.ftuTypeOptions.innerHTML = values.map((value) => `<option value="${escapeHtml(value)}"></option>`).join('');
@@ -89,17 +112,19 @@ function mergeBcRows(rows) {
   for (const row of rows ?? []) {
     const existing = state.connections.find((item) => key(item.kabelId) === key(row.kabelId));
     if (existing) {
-      existing.bcStatusCode = row.statusCode; existing.bcFiber = row.fiber; existing.bcOdf = row.odf; existing.bcStrengId = row.strengId;
-      if (row.fiber !== null && row.fiber !== undefined && row.fiber !== '') existing.fiber = row.fiber;
-      if (!normalize(existing.ftuType)) existing.ftuType = row.ftuType;
+      applyBcRow(existing, row);
+      const selected = state.selected.get(key(row.kabelId));
+      if (selected) applyBcRow(selected, row);
       enriched++;
       continue;
     }
-    state.connections.push({ ...row, kastnr: null, complex: null, isNew: true, bcStatusCode: row.statusCode, bcFiber: row.fiber, bcOdf: row.odf, bcStrengId: row.strengId });
+    const created = { ...row, kastnr: resolveBcStatus(row.statusCode, null), complex: null, isNew: true, bcStatusCode: row.statusCode, bcFiber: row.fiber, bcOdf: row.odf, bcStrengId: row.strengId };
+    if (created.kastnr === 'GV') created.ftuType = '';
+    state.connections.push(created);
     added++;
   }
   state.connections.sort((a, b) => formatAddress(a).localeCompare(formatAddress(b), 'es', { numeric: true }));
-  renderFtuOptions(); renderSearchResults(); updateStats();
+  renderFtuOptions(); renderSelected(); renderSearchResults(); updateStats();
   return { added, enriched };
 }
 
