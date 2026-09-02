@@ -569,13 +569,76 @@ function Import-FcRows {
     return $rows
 }
 
+function Import-SemicolonCsvRows {
+    param([string]$Path)
+
+    Add-Type -AssemblyName Microsoft.VisualBasic
+    $resolvedPath = (Resolve-Path -LiteralPath $Path).Path
+    $parser = [Microsoft.VisualBasic.FileIO.TextFieldParser]::new($resolvedPath)
+    $parser.SetDelimiters(';')
+    $parser.HasFieldsEnclosedInQuotes = $true
+    $rows = [System.Collections.Generic.List[object]]::new()
+
+    try {
+        if ($parser.EndOfData) {
+            return @()
+        }
+
+        $rawHeaders = @($parser.ReadFields())
+        $headers = [System.Collections.Generic.List[string]]::new()
+        $usedHeaders = @{}
+        for ($columnIndex = 0; $columnIndex -lt $rawHeaders.Count; $columnIndex++) {
+            $header = Normalize-Text $rawHeaders[$columnIndex]
+            if ($null -eq $header) {
+                $header = '__Unnamed{0}' -f ($columnIndex + 1)
+            }
+
+            $baseHeader = $header
+            $suffix = 2
+            while ($usedHeaders.ContainsKey($header.ToUpperInvariant())) {
+                $header = '{0}_{1}' -f $baseHeader, $suffix
+                $suffix++
+            }
+
+            $usedHeaders[$header.ToUpperInvariant()] = $true
+            $headers.Add($header)
+        }
+
+        while (-not $parser.EndOfData) {
+            $fields = @($parser.ReadFields())
+            $row = [ordered]@{}
+            $fieldCount = [Math]::Max($headers.Count, $fields.Count)
+            for ($columnIndex = 0; $columnIndex -lt $fieldCount; $columnIndex++) {
+                $header = if ($columnIndex -lt $headers.Count) { $headers[$columnIndex] } else { '__Extra{0}' -f ($columnIndex + 1) }
+                $row[$header] = if ($columnIndex -lt $fields.Count) { $fields[$columnIndex] } else { $null }
+            }
+            $rows.Add([pscustomobject]$row)
+        }
+    }
+    finally {
+        $parser.Close()
+    }
+
+    return @($rows)
+}
+
 function Import-BcRows {
     param([string]$Path)
 
     $rows = @()
 
-    foreach ($row in (Import-Csv -LiteralPath $Path -Delimiter ';')) {
-        $cableId = Normalize-Text (Get-FirstRowValue -Row $row -Names @('KabelID', 'Kabel ID'))
+    foreach ($row in (Import-SemicolonCsvRows -Path $Path)) {
+        $cableId = Normalize-Text (Get-FirstRowValue -Row $row -Names @('KabelID', 'Kabel ID', 'CableId', 'Kabel'))
+        if ($null -eq $cableId) {
+            foreach ($property in $row.PSObject.Properties) {
+                $candidate = Normalize-Text $property.Value
+                if ($null -ne $candidate -and $candidate -match '(?i)^K-.+-ODP\d+-KA\d+$') {
+                    $cableId = $candidate
+                    break
+                }
+            }
+        }
+
         if ($null -eq $cableId) {
             continue
         }
@@ -2895,15 +2958,7 @@ if ($ExportFcUpdatesOnly) {
     return
 }
 
-$resolvedTemplate = (Resolve-Path -LiteralPath $TemplatePath).Path
 $resolvedBc = (Resolve-Path -LiteralPath $BcPath).Path
-
-if ([System.IO.Path]::IsPathRooted($OutputPath)) {
-    $resolvedOutput = [System.IO.Path]::GetFullPath($OutputPath)
-}
-else {
-    $resolvedOutput = [System.IO.Path]::GetFullPath((Join-Path -Path (Get-Location) -ChildPath $OutputPath))
-}
 
 $externalMetadata = Get-ExternalMetadata -Path $MetadataPath
 $internalDpDecisions = Convert-ExternalInternalDpDecisions -InternalDpDecisions $(if ($null -ne $externalMetadata) { $externalMetadata.internalDpDecisions } else { $null })
@@ -3112,6 +3167,14 @@ if ($ExportRiserDataOnly) {
     Set-Content -LiteralPath $RiserDataOutputPath -Value $riserDataJson -Encoding UTF8
     Write-Output "Datos del riser exportados en $RiserDataOutputPath"
     return
+}
+
+$resolvedTemplate = (Resolve-Path -LiteralPath $TemplatePath).Path
+if ([System.IO.Path]::IsPathRooted($OutputPath)) {
+    $resolvedOutput = [System.IO.Path]::GetFullPath($OutputPath)
+}
+else {
+    $resolvedOutput = [System.IO.Path]::GetFullPath((Join-Path -Path (Get-Location) -ChildPath $OutputPath))
 }
 
 Write-Host "Copiando template a $resolvedOutput"
