@@ -899,6 +899,20 @@ function Get-NormalizedDempingValue {
     return [math]::Round($numericValue, 2)
 }
 
+function Test-IsStatus2Customer {
+    param(
+        [object]$FtuLocation,
+        [object]$FtuType
+    )
+
+    $normalizedLocation = Normalize-UpperStatus $FtuLocation
+    if ($normalizedLocation -in @('MTK', 'WNK', 'ANDE', 'KLDR')) {
+        return $true
+    }
+
+    return ($normalizedLocation -eq 'XXXX' -and $null -ne (Normalize-Text $FtuType))
+}
+
 function Fix-CustomerDempingValues {
     param([__ComObject]$Database)
 
@@ -909,13 +923,43 @@ function Fix-CustomerDempingValues {
         'Dempingswaarde2Z'
     )
 
-    $recordset = $Database.OpenRecordset('SELECT [ID], [Dempingswaarde1A], [Dempingswaarde1Z], [Dempingswaarde2A], [Dempingswaarde2Z] FROM [Klant]')
+    $recordset = $Database.OpenRecordset('SELECT [ID], [Kastnr], [FTUType], [Dempingswaarde1A], [Dempingswaarde1Z], [Dempingswaarde2A], [Dempingswaarde2Z] FROM [Klant]')
     $updatedRows = 0
     $updatedFields = 0
+    $clearedNonStatus2Rows = 0
+    $clearedNonStatus2Fields = 0
 
     try {
         while (-not $recordset.EOF) {
             $rowChanged = $false
+            $isStatus2 = Test-IsStatus2Customer -FtuLocation $recordset.Fields('Kastnr').Value -FtuType $recordset.Fields('FTUType').Value
+
+            if (-not $isStatus2) {
+                foreach ($fieldName in @('FTUType') + $fieldNames) {
+                    $field = $recordset.Fields($fieldName)
+                    if ($null -eq (Normalize-Text $field.Value)) {
+                        continue
+                    }
+
+                    if (-not $rowChanged) {
+                        $recordset.Edit()
+                        $rowChanged = $true
+                    }
+
+                    $field.Value = [System.DBNull]::Value
+                    $updatedFields++
+                    $clearedNonStatus2Fields++
+                }
+
+                if ($rowChanged) {
+                    $recordset.Update()
+                    $updatedRows++
+                    $clearedNonStatus2Rows++
+                }
+
+                $recordset.MoveNext()
+                continue
+            }
 
             foreach ($fieldName in $fieldNames) {
                 $field = $recordset.Fields($fieldName)
@@ -953,8 +997,10 @@ function Fix-CustomerDempingValues {
     }
 
     return [pscustomobject]@{
-        updatedRows = $updatedRows
-        updatedFields = $updatedFields
+        updatedRows             = $updatedRows
+        updatedFields           = $updatedFields
+        clearedNonStatus2Rows   = $clearedNonStatus2Rows
+        clearedNonStatus2Fields = $clearedNonStatus2Fields
     }
 }
 
@@ -1003,7 +1049,7 @@ function Apply-DempingContingency {
             continue
         }
 
-        $sql = "SELECT [ID], [Kabel], [VEZELNR1], [Vezelnr2], [FTUType], [Dempingswaarde1A], [Dempingswaarde1Z], [Dempingswaarde2A], [Dempingswaarde2Z] FROM [Klant] WHERE " + ($whereParts -join ' OR ')
+        $sql = "SELECT [ID], [Kabel], [Kastnr], [VEZELNR1], [Vezelnr2], [FTUType], [Dempingswaarde1A], [Dempingswaarde1Z], [Dempingswaarde2A], [Dempingswaarde2Z] FROM [Klant] WHERE " + ($whereParts -join ' OR ')
         $recordset = $Database.OpenRecordset($sql)
 
         try {
@@ -1014,6 +1060,12 @@ function Apply-DempingContingency {
 
             $recordset.Edit()
             $rowChanged = $false
+            $isStatus2 = Test-IsStatus2Customer -FtuLocation $recordset.Fields('Kastnr').Value -FtuType $recordset.Fields('FTUType').Value
+
+            if (-not $isStatus2) {
+                $clearFields = @($clearFields) + @('FTUType', 'Dempingswaarde1A', 'Dempingswaarde1Z', 'Dempingswaarde2A', 'Dempingswaarde2Z')
+                $fields = $null
+            }
 
             foreach ($fieldName in $allowedFields) {
                 if ($null -eq $fields -or -not ($fields.PSObject.Properties.Name -contains $fieldName)) {

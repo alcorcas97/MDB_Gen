@@ -2647,7 +2647,7 @@ ipcMain.handle('mdb:fix-customer-dempings', async (_event, payload) => {
   sendGenerationEvent({
     type: 'log',
     level: 'info',
-    message: `Dempings corregidos en MDB: ${result.updatedRows} clientes, ${result.updatedFields} campos.\n`
+    message: `Dempings corregidos en MDB: ${result.updatedRows} clientes, ${result.updatedFields} campos. No-status-2 limpiados: ${result.clearedNonStatus2Rows ?? 0} clientes, ${result.clearedNonStatus2Fields ?? 0} campos.\n`
   });
 
   sendGenerationEvent({
@@ -2658,7 +2658,9 @@ ipcMain.handle('mdb:fix-customer-dempings', async (_event, payload) => {
   return {
     mdbPath: workingMdbPath,
     updatedRows: result.updatedRows,
-    updatedFields: result.updatedFields
+    updatedFields: result.updatedFields,
+    clearedNonStatus2Rows: result.clearedNonStatus2Rows ?? 0,
+    clearedNonStatus2Fields: result.clearedNonStatus2Fields ?? 0
   };
 });
 

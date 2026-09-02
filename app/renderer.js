@@ -624,7 +624,7 @@ async function fixCustomerDempings() {
   await runProjectTool({
     startMessage: 'Corrigiendo dempings en la base de datos...',
     successMessage: (result) => `Dempings corregidos: ${result.updatedFields} campos en ${result.updatedRows} clientes.`,
-    successLog: (result) => `Correccion de dempings completada en ${result.mdbPath}. Filas tocadas: ${result.updatedRows}. Campos tocados: ${result.updatedFields}.`,
+    successLog: (result) => `Correccion de dempings completada en ${result.mdbPath}. Filas tocadas: ${result.updatedRows}. Campos tocados: ${result.updatedFields}. No-status-2 limpiados: ${result.clearedNonStatus2Rows ?? 0} clientes y ${result.clearedNonStatus2Fields ?? 0} campos.`,
     action: (payload) => fiberDesktopApi.fixCustomerDempings(payload)
   });
 }
