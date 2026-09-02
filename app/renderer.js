@@ -1183,7 +1183,7 @@ async function removeExtraRoles() {
   await runProjectTool({
     startMessage: 'Buscando errores M-30173 en el check y eliminando bloques ROL extra...',
     successMessage: (result) => `Contingencia aplicada: ${result.removedCount} bloques ROL eliminados en ${result.coordinateCount} coordenadas.`,
-    successLog: (result) => `Contingencia ROL completada usando ${result.checkPath}. Coordenadas detectadas: ${result.coordinateCount}. Bloques eliminados: ${result.removedCount}.`,
+    successLog: (result) => `Contingencia ROL completada usando ${result.checkPath}. Coordenadas detectadas: ${result.coordinateCount}. Bloques eliminados: ${result.removedCount}. VEZELNR1 corregidos a 1: ${result.normalizedFiberRows ?? 0}.`,
     action: (payload) => fiberDesktopApi.removeExtraRoles(payload)
   });
 }

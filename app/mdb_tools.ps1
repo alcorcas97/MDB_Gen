@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('ExportCustomerDrawData', 'ImportCustomerCoordinates', 'ExportDpCoordinateTargets', 'ImportDpCoordinates', 'MoveResvCoordinatesToDp', 'SetOapCoordinate', 'UppercaseOap', 'ExportCrossCheckData', 'FixCustomerDempingValues', 'ApplyDempingContingency', 'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh', 'ApplyGlaspoortProject', 'InspectConnectionBalance', 'ApplyConnectionSync', 'ExportRiserState', 'ApplyRiserData', 'AddRiserData', 'DeleteRiserData', 'ApplyBuiseind', 'ExportPartialDeliveryData', 'ApplyPartialDelivery')]
+    [ValidateSet('ExportCustomerDrawData', 'ImportCustomerCoordinates', 'ExportDpCoordinateTargets', 'ImportDpCoordinates', 'MoveResvCoordinatesToDp', 'SetOapCoordinate', 'UppercaseOap', 'ExportCrossCheckData', 'NormalizeCustomerFiber1', 'FixCustomerDempingValues', 'ApplyDempingContingency', 'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh', 'ApplyGlaspoortProject', 'InspectConnectionBalance', 'ApplyConnectionSync', 'ExportRiserState', 'ApplyRiserData', 'AddRiserData', 'DeleteRiserData', 'ApplyBuiseind', 'ExportPartialDeliveryData', 'ApplyPartialDelivery')]
     [string]$Mode,
 
     [Parameter(Mandatory = $true)]
@@ -899,6 +899,35 @@ function Get-NormalizedDempingValue {
     return [math]::Round($numericValue, 2)
 }
 
+function Normalize-CustomerFiber1 {
+    param([__ComObject]$Database)
+
+    $recordset = $Database.OpenRecordset('SELECT [ID], [VEZELNR1] FROM [Klant]')
+    $updatedRows = 0
+
+    try {
+        while (-not $recordset.EOF) {
+            $currentValue = Convert-ToNullableDouble $recordset.Fields('VEZELNR1').Value
+            if ($null -eq $currentValue -or [math]::Abs($currentValue - 1) -gt 0.000001) {
+                $recordset.Edit()
+                $recordset.Fields('VEZELNR1').Value = 1
+                $recordset.Update()
+                $updatedRows++
+            }
+
+            $recordset.MoveNext()
+        }
+    }
+    finally {
+        $recordset.Close()
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($recordset)
+    }
+
+    return [pscustomobject]@{
+        updatedRows = $updatedRows
+    }
+}
+
 function Test-IsStatus2Customer {
     param(
         [object]$FtuLocation,
@@ -1017,7 +1046,6 @@ function Apply-DempingContingency {
     $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
     $items = @((ConvertFrom-Json -InputObject ($raw -replace '^\uFEFF', '')))
     $allowedFields = @(
-        'VEZELNR1',
         'Vezelnr2',
         'FTUType',
         'Dempingswaarde1A',
@@ -3291,7 +3319,7 @@ $compactAfterClose = (
     $context.Mode -eq 'Dao' -and
     $Mode -in @(
         'ImportCustomerCoordinates', 'ImportDpCoordinates', 'MoveResvCoordinatesToDp',
-        'SetOapCoordinate', 'UppercaseOap', 'FixCustomerDempingValues', 'ApplyDempingContingency',
+        'SetOapCoordinate', 'UppercaseOap', 'NormalizeCustomerFiber1', 'FixCustomerDempingValues', 'ApplyDempingContingency',
         'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh',
         'ApplyGlaspoortProject', 'ApplyConnectionSync', 'ApplyRiserData',
         'AddRiserData', 'DeleteRiserData', 'ApplyBuiseind', 'ApplyPartialDelivery'
@@ -3337,6 +3365,11 @@ try {
 
         'ExportCrossCheckData' {
             Export-CrossCheckData -Database $context.Database | ConvertTo-Json -Depth 8
+            break
+        }
+
+        'NormalizeCustomerFiber1' {
+            Normalize-CustomerFiber1 -Database $context.Database | ConvertTo-Json -Depth 4
             break
         }
 

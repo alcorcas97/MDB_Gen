@@ -1608,10 +1608,6 @@ async function extractDempingContingencyItems(projectFolderPath) {
     const vezelnr2 = String(getCheckValue(row, ['vezelnr2', 'vezel nr2', 'vezelnummer2']) ?? '').trim();
     const ftuType = String(getCheckValue(row, ['ftutype', 'ftu type', 'FTUType']) ?? '').trim();
 
-    if (vezelnr1) {
-      clearFields.push('VEZELNR1');
-    }
-
     if (vezelnr2) {
       clearFields.push('Vezelnr2');
     }
@@ -4045,6 +4041,7 @@ ipcMain.handle('dwg:remove-extra-roles', async (_event, payload) => {
   }
 
   validateProjectAndMdbInput(payload);
+  const workingMdbPath = await resolveProjectWorkingMdbPath(payload.projectFolderPath);
 
   sendGenerationEvent({
     type: 'status',
@@ -4101,12 +4098,29 @@ ipcMain.handle('dwg:remove-extra-roles', async (_event, payload) => {
     });
   }
 
+  const fiberResult = await runMdbToolsJson([
+    '-Mode',
+    'NormalizeCustomerFiber1',
+    '-MdbPath',
+    workingMdbPath
+  ]);
+
+  sendGenerationEvent({
+    type: 'log',
+    level: 'info',
+    message: `VEZELNR1 verificado en Klant: ${fiberResult.updatedRows} clientes corregidos a 1.\n`
+  });
+
   sendGenerationEvent({
     type: 'status',
     message: 'Contingencia de roles extra aplicada correctamente.'
   });
 
-  return result;
+  return {
+    ...result,
+    mdbPath: workingMdbPath,
+    normalizedFiberRows: fiberResult.updatedRows
+  };
 });
 
 ipcMain.handle('dwg:draw-accessnet-without-address', async (_event, payload) => {
