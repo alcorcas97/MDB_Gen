@@ -154,6 +154,24 @@ function Normalize-Measurement {
     return $text.Replace('.', ',')
 }
 
+function Resolve-CustomerMeasurement {
+    param(
+        [object]$DeliveryStatus,
+        [object]$Powermeter,
+        [object]$IpFiberValue
+    )
+
+    if ((Normalize-Text $DeliveryStatus) -ne '2') {
+        return $null
+    }
+
+    if ($null -ne $Powermeter) {
+        return $Powermeter
+    }
+
+    return $IpFiberValue
+}
+
 function Parse-DateValue {
     param([object]$Value)
 
@@ -2127,7 +2145,7 @@ function Build-ProjectModel {
             BuildingType       = $bcRow.BuildingType
             Powermeter         = $fcRow.Powermeter
             IpFiberValue       = $fcRow.IpFiberValue
-            Measurement        = if ($effectiveDeliveryStatus -eq '11') { $null } elseif ($null -ne $fcRow.Powermeter) { $fcRow.Powermeter } else { $fcRow.IpFiberValue }
+            Measurement        = Resolve-CustomerMeasurement -DeliveryStatus $effectiveDeliveryStatus -Powermeter $fcRow.Powermeter -IpFiberValue $fcRow.IpFiberValue
             AddressLabel       = $addressLabel
             DropLocationLabel  = Get-DropLocationLabel -Postcode $bcRow.Postcode -HouseNumber $bcRow.HouseNumber -HouseSuffix $bcRow.HouseSuffix -Room $bcRow.Room
             InstallDate        = $bcRow.DeliveryDate
@@ -2548,7 +2566,7 @@ function Build-KlantRows {
             FTUType          = if ($customer.StatusIs2) { 'FTU_TK01' } else { $null }
             Kabel            = $customer.CableId
             VEZELNR1         = 1
-            Dempingswaarde1A = $customer.Measurement
+            Dempingswaarde1A = if ($customer.StatusIs2) { $customer.Measurement } else { $null }
             Specificatie1A   = $null
             Dempingswaarde1Z = $null
             Specificatie1Z   = $null
@@ -2651,7 +2669,7 @@ function Build-FcUpdateAssignments {
             StatusIs2        = ($effectiveDeliveryStatus -eq '2')
             Powermeter       = $fcRow.Powermeter
             IpFiberValue     = $fcRow.IpFiberValue
-            Measurement      = if ($effectiveDeliveryStatus -eq '11') { $null } elseif ($null -ne $fcRow.Powermeter) { $fcRow.Powermeter } else { $fcRow.IpFiberValue }
+            Measurement      = Resolve-CustomerMeasurement -DeliveryStatus $effectiveDeliveryStatus -Powermeter $fcRow.Powermeter -IpFiberValue $fcRow.IpFiberValue
             DeliveryStatusFc = Normalize-Text $fcRow.DeliveryStatus
             DeliveryStatusBc = if ($null -ne $bcMatch) { Normalize-Text $bcMatch.DeliveryStatus } else { $null }
             FtuReviewWarning = $ftuResolution.Warning
@@ -2891,7 +2909,7 @@ function Build-FcRefreshData {
             Chains    = @($Model.Chains).Count
         }
         FtuReviewWarnings = @($Model.FtuReviewWarnings)
-        NoDempingCableIds = @($Model.Customers | Where-Object { (Normalize-Text $_.DeliveryStatus) -eq '11' } | ForEach-Object { Normalize-Text $_.CableId })
+        NoDempingCableIds = @($Model.Customers | Where-Object { (Normalize-Text $_.DeliveryStatus) -ne '2' } | ForEach-Object { Normalize-Text $_.CableId })
         TableRows = [pscustomobject]@{
             Kabel = @($TableRows.Kabel)
             Klant = @($TableRows.Klant)
