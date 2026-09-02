@@ -788,7 +788,21 @@ async function updateFc() {
       projectFolderPath: elements.projectFolderPath.value.trim()
     });
 
+    if (result.cancelled) {
+      setStatus('Actualizacion FC cancelada antes de modificar la MDB.', 'warning');
+      appendLog('Actualizacion FC cancelada por el usuario. La base de datos no se ha modificado.', 'warning');
+      return;
+    }
+
     appendLog(`FC actualizado en ${result.mdbPath}. Klant rehechos: ${result.rebuiltCustomers ?? 'n/d'}, con cambios en ${result.updatedCustomers} filas y ${result.updatedCustomerFields} campos. Kabel rehechos: ${result.rebuiltCables ?? 'n/d'}, con cambios en ${result.updatedCables} filas y ${result.updatedCableFields} campos. Final: ${result.finalCustomers ?? 'n/d'} clientes, ${result.finalCables ?? 'n/d'} cables.`, 'success');
+    if (Array.isArray(result.ftuReviewDecisions) && result.ftuReviewDecisions.length > 0) {
+      appendLog(`FTU locatie confirmados manualmente: ${result.ftuReviewDecisions.length}.`, 'info');
+      for (const decision of result.ftuReviewDecisions) {
+        const addressCode = decision?.AddressCode ? ` [${decision.AddressCode}]` : '';
+        const suggestion = decision?.SuggestedLocation ? `, sugerencia=${decision.SuggestedLocation}` : '';
+        appendLog(`- ${decision?.CableId ?? 'sin cable'}${addressCode}: elegido=${decision?.SelectedLocation ?? 'vacio'}${suggestion}`, 'info');
+      }
+    }
     if (typeof result.addedCustomers === 'number' || typeof result.removedCustomers === 'number') {
       appendLog(`Altas por FC+BC: ${result.addedCustomers ?? 0}. Bajas por FC+BC: ${result.removedCustomers ?? 0}.`, 'info');
     }

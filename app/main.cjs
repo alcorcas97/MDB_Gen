@@ -10,6 +10,10 @@ const {
   parseBcCsv,
   parseFcRows
 } = require('./lib/partial-delivery.cjs');
+const {
+  applyFtuReviewDecision,
+  buildFtuNeighborSuggestion
+} = require('./lib/ftu-review.cjs');
 
 const appRoot = path.resolve(__dirname, '..');
 const generatorScriptPath = path.join(appRoot, 'generate_mdb.ps1');
@@ -2289,6 +2293,88 @@ async function resolveAmbiguousInternalDps(analysis) {
   return decisions;
 }
 
+async function resolveAmbiguousFtuLocations(assignmentsPath) {
+  const raw = await fsp.readFile(assignmentsPath, 'utf8');
+  const refreshData = JSON.parse(raw.replace(/^\uFEFF/, ''));
+  const warnings = Array.isArray(refreshData?.FtuReviewWarnings)
+    ? [...refreshData.FtuReviewWarnings]
+    : [];
+  const decisions = [];
+
+  for (const warning of warnings) {
+    const cableId = String(warning?.CableId ?? '').trim();
+    const allowed = [...new Set((warning?.Allowed ?? []).map((value) => String(value ?? '').trim().toUpperCase()).filter(Boolean))];
+    if (!cableId || allowed.length === 0) {
+      continue;
+    }
+
+    const analysis = buildFtuNeighborSuggestion(warning, refreshData?.TableRows?.Klant ?? []);
+    const orderedAllowed = analysis.suggestion
+      ? [analysis.suggestion, ...allowed.filter((value) => value !== analysis.suggestion)]
+      : allowed;
+    const choices = orderedAllowed.map((value) => ({ label: analysis.suggestion === value ? `Usar ${value} (sugerido)` : `Usar ${value}`, value }));
+    const leaveIndex = choices.length;
+    const cancelIndex = choices.length + 1;
+    const countText = Object.entries(analysis.counts)
+      .map(([location, count]) => `${location}: ${count}`)
+      .join(', ');
+    const neighborText = analysis.neighbors
+      .map((item) => `KA${String(item.position).padStart(2, '0')}=${item.location}`)
+      .join(', ');
+    const suggestionText = analysis.suggestion
+      ? `La mayoria cercana sugiere ${analysis.suggestion}.`
+      : 'No hay una mayoria cercana suficiente para sugerir un FTU.';
+    const addressText = warning?.AddressCode ? `\nDireccion: ${warning.AddressCode}` : '';
+
+    sendGenerationEvent({
+      type: 'status',
+      message: `Confirmacion FTU requerida para ${cableId}.`
+    });
+
+    const response = await dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      title: 'Revisar FTU locatie',
+      message: `${cableId}${addressText}\nStatus BC: ${warning?.DeliveryStatus ?? 'sin dato'}\n\n${suggestionText}`,
+      detail: `FTU permitidos: ${allowed.join(', ')}.\nVecinos compatibles en las 5 posiciones anteriores/posteriores: ${countText || 'ninguno'}.\n${neighborText || 'Sin vecinos utilizables.'}`,
+      buttons: [...choices.map((choice) => choice.label), 'Dejar XXXX', 'Cancelar actualizacion'],
+      defaultId: analysis.suggestion ? 0 : leaveIndex,
+      cancelId: cancelIndex,
+      noLink: true
+    });
+
+    if (response.response === cancelIndex) {
+      return { cancelled: true, decisions };
+    }
+
+    if (response.response === leaveIndex) {
+      sendGenerationEvent({
+        type: 'log',
+        level: 'warning',
+        message: `${cableId}: el usuario ha decidido mantener FTU_Locatie=XXXX.\n`
+      });
+      continue;
+    }
+
+    const selected = choices[response.response]?.value;
+    const decision = applyFtuReviewDecision(refreshData, warning, selected);
+    decisions.push({
+      ...decision,
+      SuggestedLocation: analysis.suggestion
+    });
+    sendGenerationEvent({
+      type: 'log',
+      level: 'info',
+      message: `${cableId}: FTU_Locatie=${selected} confirmado por el usuario${analysis.suggestion === selected ? ' (coincide con la sugerencia cercana)' : ''}.\n`
+    });
+  }
+
+  if (decisions.length > 0) {
+    await fsp.writeFile(assignmentsPath, JSON.stringify(refreshData, null, 2), 'utf8');
+  }
+
+  return { cancelled: false, decisions };
+}
+
 async function promptTextInput(title, message, defaultValue = '') {
   const script = `
     (() => {
@@ -2906,6 +2992,19 @@ ipcMain.handle('mdb:update-fc', async (_event, payload) => {
       assignmentsPath
     ]);
 
+    const ftuReview = await resolveAmbiguousFtuLocations(assignmentsPath);
+    if (ftuReview.cancelled) {
+      sendGenerationEvent({
+        type: 'status',
+        message: 'Actualizacion FC cancelada antes de modificar la MDB.'
+      });
+      return {
+        mdbPath: workingMdbPath,
+        cancelled: true,
+        ftuReviewDecisions: ftuReview.decisions
+      };
+    }
+
     const result = await runMdbToolsJson([
       '-Mode',
       'ApplyFcRefresh',
@@ -2985,7 +3084,9 @@ ipcMain.handle('mdb:update-fc', async (_event, payload) => {
       removedCustomers: result.removedCustomers,
       customerFieldChanges: result.customerFieldChanges ?? {},
       cableFieldChanges: result.cableFieldChanges ?? {},
-      warnings: result.warnings ?? []
+      warnings: result.warnings ?? [],
+      preservedDrawingStatuses: result.preservedDrawingStatuses ?? [],
+      ftuReviewDecisions: ftuReview.decisions
     };
   }
   finally {
