@@ -16,7 +16,7 @@
         </div>
 
         <div class="topbar-actions">
-          <span id="appVersion" class="version-pill">v1.1.44</span>
+          <span id="appVersion" class="version-pill">v1.2.0</span>
           <button id="inspectButton" class="button secondary" type="button">Revisar carpeta</button>
           <button id="openOutputButton" class="button tertiary" type="button" disabled>Abrir salida</button>
         </div>
@@ -200,6 +200,22 @@
               </div>
             </article>
           </div>
+
+          <article class="history-panel">
+            <div class="history-copy">
+              <span>SEGURIDAD · 1.2</span>
+              <strong>Historial de operaciones</strong>
+              <small id="historyDetail">Selecciona un proyecto y recarga para ver sus copias.</small>
+            </div>
+            <div class="history-controls">
+              <select id="operationHistorySelect" aria-label="Copia de seguridad a restaurar">
+                <option value="">Sin copias disponibles</option>
+              </select>
+              <button id="refreshHistoryButton" class="button tertiary" type="button">Recargar</button>
+              <button id="openHistoryFolderButton" class="button tertiary" type="button">Abrir carpeta</button>
+              <button id="restoreHistoryButton" class="button danger" type="button" disabled>Restaurar</button>
+            </div>
+          </article>
         </section>
 
         <section class="panel panel-log">

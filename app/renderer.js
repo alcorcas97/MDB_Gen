@@ -49,7 +49,12 @@ const elements = {
   buildingDetail: document.getElementById('buildingDetail'),
   connectionBalanceCard: document.getElementById('connectionBalanceCard'),
   connectionBalanceStatus: document.getElementById('connectionBalanceStatus'),
-  connectionBalanceDetail: document.getElementById('connectionBalanceDetail')
+  connectionBalanceDetail: document.getElementById('connectionBalanceDetail'),
+  operationHistorySelect: document.getElementById('operationHistorySelect'),
+  historyDetail: document.getElementById('historyDetail'),
+  refreshHistoryButton: document.getElementById('refreshHistoryButton'),
+  openHistoryFolderButton: document.getElementById('openHistoryFolderButton'),
+  restoreHistoryButton: document.getElementById('restoreHistoryButton')
 };
 
 const fiberDesktopApi = window.fiberApp ?? null;
@@ -59,7 +64,8 @@ const state = {
   cancelAvailable: false,
   outputTouched: false,
   lastOutputPath: null,
-  lastConnectionBalance: null
+  lastConnectionBalance: null,
+  operationHistory: []
 };
 
 function basename(filePath) {
@@ -178,6 +184,121 @@ function setRunningState(running, cancelAvailable = false) {
 
   elements.cancelButton.disabled = !state.cancelAvailable;
   elements.openOutputButton.disabled = running || !state.lastOutputPath;
+  elements.operationHistorySelect.disabled = running || state.operationHistory.length === 0;
+  elements.refreshHistoryButton.disabled = running;
+  elements.openHistoryFolderButton.disabled = running || !elements.projectFolderPath.value.trim();
+  elements.restoreHistoryButton.disabled = running || !elements.operationHistorySelect.value;
+}
+
+function formatHistoryDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Fecha desconocida' : date.toLocaleString('es-ES');
+}
+
+function updateHistoryDetail() {
+  const selected = state.operationHistory.find((entry) => entry.id === elements.operationHistorySelect.value);
+  if (!selected) {
+    elements.historyDetail.textContent = state.operationHistory.length > 0
+      ? `${state.operationHistory.length} copias disponibles.`
+      : 'No hay copias todavía para este proyecto.';
+    elements.restoreHistoryButton.disabled = true;
+    return;
+  }
+
+  const fileNames = selected.files.map((file) => basename(file.sourcePath)).join(', ');
+  const summary = Object.entries(selected.summary ?? {})
+    .filter(([, value]) => typeof value === 'number' || typeof value === 'boolean')
+    .slice(0, 4)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(' · ');
+  const status = selected.status === 'failed'
+    ? 'Falló después de crear la copia'
+    : selected.status === 'cancelled'
+      ? 'Operación cancelada'
+      : selected.status === 'completed'
+        ? 'Completada'
+        : 'Copia preparada';
+  elements.historyDetail.textContent = `${formatHistoryDate(selected.createdAt)} · ${status} · ${selected.fileCount} archivo(s): ${fileNames}${summary ? ` · ${summary}` : ''}`;
+  elements.restoreHistoryButton.disabled = state.running;
+}
+
+async function loadOperationHistory({ silent = false } = {}) {
+  const projectFolderPath = elements.projectFolderPath.value.trim();
+  state.operationHistory = [];
+  elements.operationHistorySelect.innerHTML = '';
+
+  if (!fiberDesktopApi || !projectFolderPath) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'Selecciona un proyecto';
+    elements.operationHistorySelect.append(option);
+    updateHistoryDetail();
+    return;
+  }
+
+  try {
+    const result = await fiberDesktopApi.listOperationHistory({ projectFolderPath });
+    state.operationHistory = Array.isArray(result.entries) ? result.entries : [];
+    if (state.operationHistory.length === 0) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = 'Sin copias disponibles';
+      elements.operationHistorySelect.append(option);
+    }
+    else {
+      for (const entry of state.operationHistory) {
+        const option = document.createElement('option');
+        option.value = entry.id;
+        option.textContent = `${formatHistoryDate(entry.createdAt)} · ${entry.label} · ${entry.fileCount} archivo(s)`;
+        elements.operationHistorySelect.append(option);
+      }
+    }
+    updateHistoryDetail();
+  }
+  catch (error) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'No se pudo leer el historial';
+    elements.operationHistorySelect.append(option);
+    updateHistoryDetail();
+    if (!silent) {
+      setStatus(error.message, 'error');
+      appendLog(error.message, 'error');
+    }
+  }
+  finally {
+    setRunningState(state.running, state.cancelAvailable);
+  }
+}
+
+async function restoreSelectedHistory() {
+  const entryId = elements.operationHistorySelect.value;
+  if (!fiberDesktopApi || !entryId) {
+    return;
+  }
+
+  setRunningState(true, false);
+  setStatus('Preparando restauración segura...', 'neutral');
+  try {
+    const result = await fiberDesktopApi.restoreOperationHistory({
+      projectFolderPath: elements.projectFolderPath.value.trim(),
+      entryId
+    });
+    if (result.cancelled) {
+      setStatus('Restauración cancelada.', 'warning');
+      return;
+    }
+    setStatus(`Restaurado: ${result.restoredLabel}.`, 'success');
+    appendLog(`Restauración completada: ${result.restoredFiles.length} archivo(s). La versión sustituida también se ha guardado.`, 'success');
+  }
+  catch (error) {
+    setStatus(error.message, 'error');
+    appendLog(error.message, 'error');
+  }
+  finally {
+    setRunningState(false);
+    await loadOperationHistory({ silent: true });
+  }
 }
 
 function updateInspectionCards(data) {
@@ -288,6 +409,7 @@ async function inspectProjectFolder() {
     updateInspectionCards(inspection);
     setStatus('Carpeta revisada. Puedes generar el MDB cuando quieras.', 'neutral');
     appendLog(`Carpeta revisada: DWG=${inspection.hasDwg ? 'sí' : 'no'}, PDF=${inspection.permitPdfCount}, Gebouwen=${inspection.buildingFolderCount}`, 'meta');
+    await loadOperationHistory({ silent: true });
   }
   catch (error) {
     setStatus(error.message, 'error');
@@ -471,6 +593,7 @@ async function runProjectTool({ startMessage, successMessage, successLog, action
 
     setStatus(successMessage(result), 'success');
     appendLog(successLog(result), 'success');
+    await loadOperationHistory({ silent: true });
   }
   catch (error) {
     setStatus(error.message, 'error');
@@ -569,6 +692,7 @@ async function generateMdb() {
     state.lastOutputPath = result.outputPath;
     setStatus('MDB generado correctamente.', 'success');
     appendLog('Generación completada correctamente.', 'success');
+    await loadOperationHistory({ silent: true });
   }
   catch (error) {
     if (error?.message === 'La generación fue cancelada.') {
@@ -1237,7 +1361,10 @@ elements.outputPath.addEventListener('input', () => {
 });
 
 elements.fcPath.addEventListener('change', maybePopulateOutput);
-elements.projectFolderPath.addEventListener('change', maybePopulateOutput);
+elements.projectFolderPath.addEventListener('change', () => {
+  maybePopulateOutput();
+  void loadOperationHistory({ silent: true });
+});
 
 elements.browseTemplateButton.addEventListener('click', () => {
   void chooseFile(elements.templatePath, {
@@ -1270,6 +1397,25 @@ elements.browseOutputButton.addEventListener('click', () => {
 
 elements.inspectButton.addEventListener('click', () => {
   void inspectProjectFolder();
+});
+
+elements.operationHistorySelect.addEventListener('change', updateHistoryDetail);
+
+elements.refreshHistoryButton.addEventListener('click', () => {
+  void loadOperationHistory();
+});
+
+elements.openHistoryFolderButton.addEventListener('click', async () => {
+  const projectFolderPath = elements.projectFolderPath.value.trim();
+  if (!fiberDesktopApi || !projectFolderPath) {
+    setStatus('Selecciona primero la carpeta del proyecto.', 'warning');
+    return;
+  }
+  await fiberDesktopApi.openOperationHistoryFolder({ projectFolderPath });
+});
+
+elements.restoreHistoryButton.addEventListener('click', () => {
+  void restoreSelectedHistory();
 });
 
 elements.generateButton.addEventListener('click', () => {

@@ -14,6 +14,13 @@ const {
   applyFtuReviewDecision,
   buildFtuNeighborSuggestion
 } = require('./lib/ftu-review.cjs');
+const {
+  createOperationBackup,
+  getHistoryRoot,
+  listOperationHistory,
+  restoreOperation,
+  updateOperationBackup
+} = require('./lib/operation-history.cjs');
 
 const appRoot = path.resolve(__dirname, '..');
 const generatorScriptPath = path.join(appRoot, 'generate_mdb.ps1');
@@ -24,6 +31,7 @@ const windowIconPath = path.join(appRoot, 'app', 'assets', 'icon.png');
 const splashHtmlPath = path.join(__dirname, 'splash.html');
 const runtimeLogPath = path.join(os.tmpdir(), 'fiber-mdb-generator-runtime.log');
 const selfTestLogPath = path.join(os.tmpdir(), 'fiber-mdb-selftest.json');
+const selfTestScreenshotPath = path.join(os.tmpdir(), 'fiber-mdb-selftest.png');
 
 let mainWindow = null;
 let splashWindow = null;
@@ -126,6 +134,94 @@ function getCrossCheckToolsModule() {
   }
 
   return crossCheckToolsModule;
+}
+
+const MDB_HISTORY_LABELS = {
+  ImportCustomerCoordinates: 'Extraer coordenadas de clientes',
+  ImportDpCoordinates: 'Re-extraer coordenadas de DPs',
+  MoveResvCoordinatesToDp: 'Mover RESV al DP',
+  SetOapCoordinate: 'Obtener coordenada OAP',
+  UppercaseOap: 'Corregir mayúsculas OAP',
+  NormalizeCustomerFiber1: 'Verificar VEZELNR1',
+  FixCustomerDempingValues: 'Corregir dempings',
+  ApplyDempingContingency: 'Contingencia demping',
+  RebuildCustomerComplexes: 'Rehacer complex',
+  ApplyFcUpdates: 'Actualizar FC',
+  ApplyFcRefresh: 'Actualizar FC',
+  ApplyGlaspoortProject: 'Glaspoort Project',
+  ApplyConnectionSync: 'Ajustar conexiones',
+  ApplyRiserData: 'Crear riser',
+  AddRiserData: 'Añadir ET al riser',
+  DeleteRiserData: 'Eliminar riser',
+  ApplyBuiseind: 'Crear Buiseind',
+  ApplyPartialDelivery: 'Partial Delivery'
+};
+
+function getScriptArgument(scriptArgs, argumentName) {
+  const index = scriptArgs.findIndex((value) => String(value).toLowerCase() === argumentName.toLowerCase());
+  return index >= 0 && index + 1 < scriptArgs.length ? scriptArgs[index + 1] : null;
+}
+
+function summarizeOperationResult(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return {};
+  }
+
+  return Object.fromEntries(Object.entries(result).filter(([, value]) => (
+    typeof value === 'number' || typeof value === 'boolean'
+  )));
+}
+
+async function backupPrimaryDwg(projectFolderPath, label, additionalFilePaths = []) {
+  const { getFirstDwgPath } = getDwgToolsModule();
+  const dwgPath = await getFirstDwgPath(projectFolderPath);
+  const entry = await createOperationBackup({
+    projectPath: projectFolderPath,
+    operation: label,
+    label,
+    filePaths: [dwgPath, ...additionalFilePaths]
+  });
+
+  if (entry) {
+    sendGenerationEvent({
+      type: 'log',
+      level: 'info',
+      message: `Copia de seguridad creada antes de "${label}": ${entry.files.length} archivo(s).\n`
+    });
+  }
+
+  return entry;
+}
+
+async function findBoringenDwgPaths(projectFolderPath) {
+  const results = [];
+  const queue = [{ folderPath: path.resolve(projectFolderPath), insideBoringen: false, depth: 0 }];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current.depth > 5) {
+      continue;
+    }
+    const entries = await fsp.readdir(current.folderPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(current.folderPath, entry.name);
+      if (entry.isDirectory()) {
+        if (/^(back|backup|archive|archief)$/i.test(entry.name)) {
+          continue;
+        }
+        queue.push({
+          folderPath: fullPath,
+          insideBoringen: current.insideBoringen || /^boringen$/i.test(entry.name),
+          depth: current.depth + 1
+        });
+      }
+      else if (entry.isFile() && current.insideBoringen && path.extname(entry.name).toLowerCase() === '.dwg') {
+        results.push(fullPath);
+      }
+    }
+  }
+
+  return results;
 }
 
 function getDrawProgressMessage(drawnCount, totalCount) {
@@ -293,6 +389,10 @@ function createWindow() {
       `);
 
       fs.writeFileSync(selfTestLogPath, JSON.stringify(result, null, 2), 'utf8');
+      await mainWindow.webContents.executeJavaScript(`document.querySelector('.history-panel')?.scrollIntoView({ block: 'center' })`);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const screenshot = await mainWindow.webContents.capturePage();
+      fs.writeFileSync(selfTestScreenshotPath, screenshot.toPNG());
       appendRuntimeLog(`[self-test] wrote ${selfTestLogPath}`);
       console.log('[self-test] ' + JSON.stringify(result));
     }
@@ -2084,8 +2184,51 @@ async function runPowerShellJson(scriptPath, scriptArgs) {
   return JSON.parse(normalizedTranscript);
 }
 
-async function runMdbToolsJson(scriptArgs) {
-  return runPowerShellJson(mdbToolsScriptPath, scriptArgs);
+async function runMdbToolsJson(scriptArgs, options = {}) {
+  const mode = getScriptArgument(scriptArgs, '-Mode');
+  const mdbPath = getScriptArgument(scriptArgs, '-MdbPath');
+  const historyLabel = MDB_HISTORY_LABELS[mode];
+
+  let historyEntry = null;
+  if (!options.skipHistory && historyLabel && mdbPath) {
+    historyEntry = await createOperationBackup({
+      projectPath: mdbPath,
+      operation: mode,
+      label: historyLabel,
+      filePaths: [mdbPath]
+    });
+    if (historyEntry) {
+      sendGenerationEvent({
+        type: 'log',
+        level: 'info',
+        message: `Copia MDB creada antes de "${historyLabel}": ${historyEntry.files[0].sourcePath}\n`
+      });
+    }
+  }
+
+  try {
+    const result = await runPowerShellJson(mdbToolsScriptPath, scriptArgs);
+    if (historyEntry) {
+      await updateOperationBackup({
+        projectPath: mdbPath,
+        entryId: historyEntry.id,
+        status: 'completed',
+        summary: summarizeOperationResult(result)
+      });
+    }
+    return result;
+  }
+  catch (error) {
+    if (historyEntry) {
+      await updateOperationBackup({
+        projectPath: mdbPath,
+        entryId: historyEntry.id,
+        status: 'failed',
+        summary: { error: String(error?.message ?? error) }
+      }).catch(() => {});
+    }
+    throw error;
+  }
 }
 
 async function exportCrossCheckWorkbook(payload) {
@@ -2612,6 +2755,77 @@ ipcMain.handle('shell:show-item', async (_event, targetPath) => {
 
   shell.showItemInFolder(targetPath);
   return true;
+});
+
+ipcMain.handle('history:list', async (_event, payload) => {
+  const projectFolderInput = String(payload?.projectFolderPath ?? '').trim();
+  if (!projectFolderInput) {
+    throw new Error('Selecciona una carpeta de proyecto válida para consultar el historial.');
+  }
+  const projectFolderPath = path.resolve(projectFolderInput);
+  if (!fs.existsSync(projectFolderPath)) {
+    throw new Error('Selecciona una carpeta de proyecto válida para consultar el historial.');
+  }
+
+  return {
+    historyRoot: getHistoryRoot(projectFolderPath),
+    entries: await listOperationHistory(projectFolderPath)
+  };
+});
+
+ipcMain.handle('history:open-folder', async (_event, payload) => {
+  const historyRoot = getHistoryRoot(payload?.projectFolderPath);
+  await fsp.mkdir(historyRoot, { recursive: true });
+  await shell.openPath(historyRoot);
+  return historyRoot;
+});
+
+ipcMain.handle('history:restore', async (_event, payload) => {
+  if (activeRun) {
+    throw new Error('Ya hay una operación en curso.');
+  }
+
+  const projectFolderInput = String(payload?.projectFolderPath ?? '').trim();
+  if (!projectFolderInput) {
+    throw new Error('Selecciona una carpeta de proyecto válida para restaurar.');
+  }
+  const projectFolderPath = path.resolve(projectFolderInput);
+  const entryId = String(payload?.entryId ?? '').trim();
+  const entries = await listOperationHistory(projectFolderPath);
+  const entry = entries.find((item) => item.id === entryId);
+  if (!entry) {
+    throw new Error('La copia seleccionada ya no está disponible. Recarga el historial.');
+  }
+
+  const fileList = entry.files.map((file) => `• ${file.sourcePath}`).join('\n');
+  const response = await dialog.showMessageBox(mainWindow, {
+    type: 'warning',
+    title: 'Restaurar operación',
+    message: `¿Restaurar el estado anterior a "${entry.label}"?`,
+    detail: `Se restaurarán ${entry.files.length} archivo(s):\n${fileList}\n\nAntes se guardará otra copia del estado actual. Cierra Access y AutoCAD para evitar archivos bloqueados.`,
+    buttons: ['Restaurar', 'Cancelar'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true
+  });
+
+  if (response.response !== 0) {
+    return { cancelled: true };
+  }
+
+  const result = await restoreOperation({ projectPath: projectFolderPath, entryId });
+  sendGenerationEvent({
+    type: 'log',
+    level: 'success',
+    message: `Restaurado "${entry.label}": ${result.restoredFiles.length} archivo(s). Se ha guardado una copia previa del estado actual.\n`
+  });
+
+  return {
+    cancelled: false,
+    restoredLabel: entry.label,
+    restoredFiles: result.restoredFiles,
+    safetyBackupId: result.safetyBackup?.id ?? null
+  };
 });
 
 ipcMain.handle('mdb:fix-customer-dempings', async (_event, payload) => {
@@ -3570,6 +3784,7 @@ ipcMain.handle('dwg:draw-customers', async (_event, payload) => {
     message: getDrawProgressMessage(0, drawItems.length)
   });
 
+  const dwgBackup = await backupPrimaryDwg(payload.projectFolderPath, 'Dibujar coordenadas de clientes');
   const { drawCustomerCoordinatesToDwg } = getDwgToolsModule();
   const result = await drawCustomerCoordinatesToDwg(payload.projectFolderPath, Array.isArray(drawItems) ? drawItems : [], {
     onStage: (stage) => {
@@ -3592,6 +3807,9 @@ ipcMain.handle('dwg:draw-customers', async (_event, payload) => {
       });
     }
   });
+  if (dwgBackup) {
+    await updateOperationBackup({ projectPath: payload.projectFolderPath, entryId: dwgBackup.id, status: 'completed', summary: summarizeOperationResult(result) });
+  }
 
   if (result.usedOpenDocument) {
     sendGenerationEvent({
@@ -3643,6 +3861,7 @@ ipcMain.handle('dwg:place-phkt-texts', async (_event, payload) => {
     message: 'Iniciando asignacion PHKT. Los textos aceptados se moveran en vivo durante la revision.\n'
   });
 
+  const dwgBackup = await backupPrimaryDwg(payload.projectFolderPath, 'Asignar PHKT a Accessnet');
   const { placePhktTextsAtAccessnetVertices } = getDwgToolsModule();
   const result = await placePhktTextsAtAccessnetVertices(payload.projectFolderPath, {
     onStage: (stage) => {
@@ -3663,6 +3882,9 @@ ipcMain.handle('dwg:place-phkt-texts', async (_event, payload) => {
       });
     }
   });
+  if (dwgBackup) {
+    await updateOperationBackup({ projectPath: payload.projectFolderPath, entryId: dwgBackup.id, status: result.cancelled ? 'cancelled' : 'completed', summary: summarizeOperationResult(result) });
+  }
 
   sendGenerationEvent({
     type: 'status',
@@ -3689,6 +3911,7 @@ ipcMain.handle('dwg:place-routing-phkt-from-check', async (_event, payload) => {
     message: 'Buscando direcciones locatienaam_b en la tabla cable: Routing problem del check.\n'
   });
 
+  const dwgBackup = await backupPrimaryDwg(payload.projectFolderPath, 'PHKT routing check');
   const { placeRoutingProblemPhktFromCheck } = getDwgToolsModule();
   const result = await placeRoutingProblemPhktFromCheck(payload.projectFolderPath, {
     onStage: (stage) => {
@@ -3711,6 +3934,9 @@ ipcMain.handle('dwg:place-routing-phkt-from-check', async (_event, payload) => {
       });
     }
   });
+  if (dwgBackup) {
+    await updateOperationBackup({ projectPath: payload.projectFolderPath, entryId: dwgBackup.id, status: result.cancelled ? 'cancelled' : 'completed', summary: summarizeOperationResult(result) });
+  }
 
   sendGenerationEvent({
     type: 'status',
@@ -3734,6 +3960,7 @@ ipcMain.handle('dwg:clear-customers', async (_event, payload) => {
     message: 'Preparando limpieza del DWG...'
   });
 
+  const dwgBackup = await backupPrimaryDwg(payload.projectFolderPath, 'Limpiar coordenadas de clientes');
   const { clearCustomerCoordinatesInDwg } = getDwgToolsModule();
   const result = await clearCustomerCoordinatesInDwg(payload.projectFolderPath, {
     onStage: (stage) => {
@@ -3748,6 +3975,9 @@ ipcMain.handle('dwg:clear-customers', async (_event, payload) => {
       });
     }
   });
+  if (dwgBackup) {
+    await updateOperationBackup({ projectPath: payload.projectFolderPath, entryId: dwgBackup.id, status: 'completed', summary: summarizeOperationResult(result) });
+  }
 
   if (result.usedOpenDocument) {
     sendGenerationEvent({
@@ -4048,6 +4278,7 @@ ipcMain.handle('dwg:remove-extra-roles', async (_event, payload) => {
     message: 'Buscando Checks.htm y leyendo errores M-30173...'
   });
 
+  const operationBackup = await backupPrimaryDwg(payload.projectFolderPath, 'Eliminar roles extra', [workingMdbPath]);
   const { removeExtraRolesFromCheck } = getDwgToolsModule();
   const result = await removeExtraRolesFromCheck(payload.projectFolderPath, {
     onStage: (stage) => {
@@ -4103,7 +4334,15 @@ ipcMain.handle('dwg:remove-extra-roles', async (_event, payload) => {
     'NormalizeCustomerFiber1',
     '-MdbPath',
     workingMdbPath
-  ]);
+  ], { skipHistory: true });
+  if (operationBackup) {
+    await updateOperationBackup({
+      projectPath: payload.projectFolderPath,
+      entryId: operationBackup.id,
+      status: 'completed',
+      summary: { ...summarizeOperationResult(result), normalizedFiberRows: fiberResult.updatedRows }
+    });
+  }
 
   sendGenerationEvent({
     type: 'log',
@@ -4135,6 +4374,7 @@ ipcMain.handle('dwg:draw-accessnet-without-address', async (_event, payload) => 
     message: 'Buscando Checks.htm y leyendo errores M-30001...'
   });
 
+  const dwgBackup = await backupPrimaryDwg(payload.projectFolderPath, 'Accessnet sin dirección');
   const { drawAccessnetWithoutAddressFromCheck } = getDwgToolsModule();
   const result = await drawAccessnetWithoutAddressFromCheck(payload.projectFolderPath, {
     onStage: (stage) => {
@@ -4157,6 +4397,9 @@ ipcMain.handle('dwg:draw-accessnet-without-address', async (_event, payload) => 
       });
     }
   });
+  if (dwgBackup) {
+    await updateOperationBackup({ projectPath: payload.projectFolderPath, entryId: dwgBackup.id, status: 'completed', summary: summarizeOperationResult(result) });
+  }
 
   if (result.usedOpenDocument) {
     sendGenerationEvent({
@@ -4206,6 +4449,8 @@ ipcMain.handle('dwg:create-gestuurde-boringen', async (_event, payload) => {
     message: 'Leyendo carpeta Boringen y referencias del DWG...'
   });
 
+  const boringenDwgPaths = await findBoringenDwgPaths(payload.projectFolderPath);
+  const dwgBackup = await backupPrimaryDwg(payload.projectFolderPath, 'Crear gestuurde boringen', boringenDwgPaths);
   const { createGestuurdeBoringen } = getDwgToolsModule();
   const result = await createGestuurdeBoringen(payload.projectFolderPath, {
     onStage: (stage) => {
@@ -4227,6 +4472,9 @@ ipcMain.handle('dwg:create-gestuurde-boringen', async (_event, payload) => {
       });
     }
   });
+  if (dwgBackup) {
+    await updateOperationBackup({ projectPath: payload.projectFolderPath, entryId: dwgBackup.id, status: 'completed', summary: summarizeOperationResult(result) });
+  }
 
   if (result.usedOpenDocument) {
     sendGenerationEvent({
@@ -4494,7 +4742,26 @@ ipcMain.handle('generation:run', async (_event, payload) => {
       message: 'Ejecutando generate_mdb.ps1...'
     });
 
-    await runGeneratorWithPowerShell(payload, tempMetadataPath);
+    const generationBackup = await createOperationBackup({
+      projectPath: payload.projectFolderPath,
+      operation: 'GenerateMdb',
+      label: 'Generar MDB',
+      filePaths: [payload.outputPath]
+    });
+    try {
+      await runGeneratorWithPowerShell(payload, tempMetadataPath);
+    }
+    catch (error) {
+      if (generationBackup) {
+        await updateOperationBackup({
+          projectPath: payload.projectFolderPath,
+          entryId: generationBackup.id,
+          status: 'failed',
+          summary: { error: String(error?.message ?? error) }
+        }).catch(() => {});
+      }
+      throw error;
+    }
 
     let oapSummary = null;
 
@@ -4529,6 +4796,15 @@ ipcMain.handle('generation:run', async (_event, payload) => {
       type: 'status',
       message: 'MDB generado correctamente.'
     });
+
+    if (generationBackup) {
+      await updateOperationBackup({
+        projectPath: payload.projectFolderPath,
+        entryId: generationBackup.id,
+        status: 'completed',
+        summary: { generated: true }
+      });
+    }
 
     return {
       outputPath: payload.outputPath,

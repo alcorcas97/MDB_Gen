@@ -258,6 +258,21 @@ input[type="text"]:focus {
   box-shadow: 0 0 0 4px rgba(67, 195, 155, 0.14);
 }
 
+select {
+  min-width: 0;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--field);
+  color: var(--ink);
+}
+
+select:focus {
+  outline: none;
+  border-color: rgba(67, 195, 155, 0.72);
+  box-shadow: 0 0 0 4px rgba(67, 195, 155, 0.14);
+}
+
 .button {
   appearance: none;
   display: inline-flex;
@@ -451,6 +466,48 @@ input[type="text"]:focus {
   gap: 9px;
 }
 
+.history-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.65fr) minmax(0, 1.35fr);
+  gap: 18px;
+  align-items: center;
+  margin-top: 14px;
+  padding: 17px;
+  border: 1px solid rgba(53, 168, 255, 0.24);
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(135deg, rgba(53, 168, 255, 0.12), rgba(17, 34, 41, 0.96) 54%),
+    var(--panel-solid);
+  box-shadow: var(--shadow-card);
+}
+
+.history-copy {
+  display: grid;
+  gap: 5px;
+}
+
+.history-copy span {
+  color: #79c9ff;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+}
+
+.history-copy strong {
+  font-size: 1.08rem;
+}
+
+.history-copy small {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.history-controls {
+  display: grid;
+  grid-template-columns: minmax(210px, 1fr) repeat(3, auto);
+  gap: 9px;
+}
+
 .panel-log .panel-head {
   margin-bottom: 12px;
 }
@@ -591,6 +648,11 @@ input[type="text"]:focus {
 
   .form-grid,
   .action-board {
+    grid-template-columns: 1fr;
+  }
+
+  .history-panel,
+  .history-controls {
     grid-template-columns: 1fr;
   }
 
