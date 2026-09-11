@@ -2388,6 +2388,20 @@ async function resolveAmbiguousInternalDps(analysis) {
   const candidates = Array.isArray(analysis?.AmbiguousInternalDps)
     ? analysis.AmbiguousInternalDps
     : [];
+  const autoDetected = Array.isArray(analysis?.AutoDetectedFullCapacityDps)
+    ? analysis.AutoDetectedFullCapacityDps
+    : [];
+
+  for (const item of autoDetected) {
+    const suffix = item?.DecisionOverridden
+      ? ' Se ha ignorado una decisión anterior de 48 fibras porque truncaría datos.'
+      : '';
+    sendGenerationEvent({
+      type: 'log',
+      level: 'info',
+      message: `${String(item?.DpLabel ?? 'DP')}: detectado automáticamente como cabecera de 96 fibras (posición máxima ${Number(item?.MaxFiber ?? 0)}).${suffix}\n`
+    });
+  }
 
   const decisions = {};
 

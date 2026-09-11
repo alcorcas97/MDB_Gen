@@ -2085,6 +2085,44 @@ function Get-BackboneCableLabel {
     return '{0}-B{1}-K{2}-S{3}' -f $ProjectLabel, $bText, $kText, $segmentText
 }
 
+function Resolve-SegmentLayout {
+    param(
+        [pscustomobject]$Segment,
+        [int]$SegmentCount,
+        [int]$SegmentIndex,
+        [AllowNull()][pscustomobject]$NextSegment,
+        [bool]$HasExplicitInternalDecision,
+        [bool]$ForceInternal
+    )
+
+    $isSingleRootDp = ($SegmentCount -eq 1 -and [int]$Segment.Stage -eq 0)
+    $hasFibersBeyond48 = ([int]$Segment.MaxFiber -gt 48)
+    $isFullCapacity = ($isSingleRootDp -and ($ForceInternal -or $hasFibersBeyond48))
+    $segmentStart = [int]$Segment.MinFiber
+    $segmentEnd = 96
+
+    if ($SegmentIndex -lt ($SegmentCount - 1)) {
+        $segmentEnd = [int]$NextSegment.MinFiber - 1
+    }
+    elseif ($isSingleRootDp -and -not $isFullCapacity) {
+        $segmentEnd = 48
+    }
+
+    # A single physical DP using ODF fibres above 48 is necessarily a 96-fibre
+    # head. Kabel IDs such as ODP101 remain customer cable names, not extra DPs.
+    if ($isFullCapacity) {
+        $segmentStart = 1
+    }
+
+    return [pscustomobject]@{
+        SegmentStart       = $segmentStart
+        SegmentEnd         = $segmentEnd
+        IsFullCapacity     = $isFullCapacity
+        HasFibersBeyond48  = $hasFibersBeyond48
+        DecisionOverridden = ($HasExplicitInternalDecision -and -not $ForceInternal -and $hasFibersBeyond48)
+    }
+}
+
 function Build-ProjectModel {
     param(
         [object[]]$FcRows,
@@ -2187,7 +2225,6 @@ function Build-ProjectModel {
             $segmentNumber = $index + 1
             $incomingCable = Get-BackboneCableLabel -ProjectLabel $projectLabel -Suffix ([int]$segment.Suffix) -SegmentNumber $segmentNumber
             $outgoingCable = $null
-            $segmentEnd = 96
             $forceInternal = $false
             $hasExplicitInternalDecision = ($segments.Count -eq 1 -and $InternalDpDecisions.ContainsKey($segment.DpLabel))
 
@@ -2195,19 +2232,22 @@ function Build-ProjectModel {
                 $forceInternal = [bool]$InternalDpDecisions[$segment.DpLabel]
             }
 
+            $nextSegment = $null
             if ($index -lt ($segments.Count - 1)) {
                 $nextSegment = $segments[$index + 1]
                 $outgoingCable = Get-BackboneCableLabel -ProjectLabel $projectLabel -Suffix ([int]$segment.Suffix) -SegmentNumber ($segmentNumber + 1)
-                $segmentEnd = [int]$nextSegment.MinFiber - 1
-            }
-            elseif ($hasExplicitInternalDecision -and -not $forceInternal) {
-                $segmentEnd = 48
-            }
-            elseif ($segments.Count -eq 1 -and [int]$segment.Stage -eq 0) {
-                $segmentEnd = 48
             }
 
-            $segmentSize = $segmentEnd - [int]$segment.MinFiber + 1
+            $layout = Resolve-SegmentLayout `
+                -Segment $segment `
+                -SegmentCount $segments.Count `
+                -SegmentIndex $index `
+                -NextSegment $nextSegment `
+                -HasExplicitInternalDecision $hasExplicitInternalDecision `
+                -ForceInternal $forceInternal
+            $segmentStart = [int]$layout.SegmentStart
+            $segmentEnd = [int]$layout.SegmentEnd
+            $segmentSize = $segmentEnd - $segmentStart + 1
             $segmentCassettes = [math]::Ceiling($segmentSize / 12.0)
             if ($segmentSize -gt 48) {
                 $cassetteType = '4SE12-A'
@@ -2223,9 +2263,13 @@ function Build-ProjectModel {
             $segments[$index] | Add-Member -NotePropertyName SegmentNumber -NotePropertyValue $segmentNumber
             $segments[$index] | Add-Member -NotePropertyName IncomingCable -NotePropertyValue $incomingCable
             $segments[$index] | Add-Member -NotePropertyName OutgoingCable -NotePropertyValue $outgoingCable
+            $segments[$index] | Add-Member -NotePropertyName SegmentStart -NotePropertyValue $segmentStart
             $segments[$index] | Add-Member -NotePropertyName SegmentEnd -NotePropertyValue $segmentEnd
             $segments[$index] | Add-Member -NotePropertyName SegmentSize -NotePropertyValue $segmentSize
             $segments[$index] | Add-Member -NotePropertyName SegmentCassettes -NotePropertyValue $segmentCassettes
+            $segments[$index] | Add-Member -NotePropertyName IsFullCapacity -NotePropertyValue ([bool]$layout.IsFullCapacity)
+            $segments[$index] | Add-Member -NotePropertyName HasFibersBeyond48 -NotePropertyValue ([bool]$layout.HasFibersBeyond48)
+            $segments[$index] | Add-Member -NotePropertyName DecisionOverridden -NotePropertyValue ([bool]$layout.DecisionOverridden)
             $segments[$index] | Add-Member -NotePropertyName CassetteType -NotePropertyValue $cassetteType
             $segments[$index] | Add-Member -NotePropertyName AccesspointType -NotePropertyValue $accesspointType
             $segments[$index] | Add-Member -NotePropertyName SpliceBoxType -NotePropertyValue $spliceBoxType
@@ -2261,6 +2305,10 @@ function Get-AmbiguousInternalDpCandidates {
 
         $segment = $chain.Segments | Select-Object -First 1
         if ([int]$segment.Stage -ne 0) {
+            continue
+        }
+
+        if ([bool]$segment.HasFibersBeyond48) {
             continue
         }
 
@@ -2813,7 +2861,7 @@ function Build-LasRows {
 
             $usedParkingCassettes = @{}
             foreach ($customer in $segment.Customers) {
-                $parkingOffset = [int]$customer.Fiber - [int]$segment.MinFiber + 1
+                $parkingOffset = [int]$customer.Fiber - [int]$segment.SegmentStart + 1
                 $cassette = [math]::Floor(($parkingOffset - 1) / 12) + 1
                 $position = (($parkingOffset - 1) % 12) + 1
                 $usedParkingCassettes[[int]$cassette] = $true
@@ -2830,7 +2878,7 @@ function Build-LasRows {
             }
 
             $offset = 0
-            for ($fiber = $segment.MinFiber; $fiber -le $segment.SegmentEnd; $fiber++) {
+            for ($fiber = $segment.SegmentStart; $fiber -le $segment.SegmentEnd; $fiber++) {
                 $offset++
                 $cassette = $segment.SegmentCassettes + [math]::Floor(($offset - 1) / 12) + 1
                 $position = (($offset - 1) % 12) + 1
@@ -3012,12 +3060,26 @@ if ($UppercaseOap -and $null -ne $projectLabelBeforeCase) {
     Write-Host "Mayusculizado OAP/proyecto: $projectLabelBeforeCase -> $projectLabelUpper"
 }
 $ambiguousInternalDps = @(Get-AmbiguousInternalDpCandidates -Model $model -InternalDpDecisions $internalDpDecisions)
+$autoDetectedFullCapacityDps = @(
+    foreach ($chain in ($model.Chains | Sort-Object Suffix)) {
+        foreach ($segment in $chain.Segments) {
+            if ([bool]$segment.IsFullCapacity -and [bool]$segment.HasFibersBeyond48) {
+                [pscustomobject]@{
+                    DpLabel            = $segment.DpLabel
+                    MaxFiber           = [int]$segment.MaxFiber
+                    DecisionOverridden = [bool]$segment.DecisionOverridden
+                }
+            }
+        }
+    }
+)
 
 if ($AnalyzeOnly) {
     $analysis = [pscustomobject]@{
-        ProjectLabel         = $model.ProjectLabel
-        ProjectNumber        = $model.ProjectNumber
-        AmbiguousInternalDps = $ambiguousInternalDps
+        ProjectLabel                 = $model.ProjectLabel
+        ProjectNumber                = $model.ProjectNumber
+        AmbiguousInternalDps         = $ambiguousInternalDps
+        AutoDetectedFullCapacityDps  = $autoDetectedFullCapacityDps
     }
 
     $analysisJson = $analysis | ConvertTo-Json -Depth 8
