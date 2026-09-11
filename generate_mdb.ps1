@@ -2091,12 +2091,12 @@ function Resolve-SegmentLayout {
         [int]$SegmentCount,
         [int]$SegmentIndex,
         [AllowNull()][pscustomobject]$NextSegment,
-        [bool]$HasExplicitInternalDecision,
         [bool]$ForceInternal
     )
 
     $isSingleRootDp = ($SegmentCount -eq 1 -and [int]$Segment.Stage -eq 0)
     $hasFibersBeyond48 = ([int]$Segment.MaxFiber -gt 48)
+    $isInternal = ($isSingleRootDp -and $ForceInternal)
     $isFullCapacity = ($isSingleRootDp -and ($ForceInternal -or $hasFibersBeyond48))
     $segmentStart = [int]$Segment.MinFiber
     $segmentEnd = 96
@@ -2117,9 +2117,10 @@ function Resolve-SegmentLayout {
     return [pscustomobject]@{
         SegmentStart       = $segmentStart
         SegmentEnd         = $segmentEnd
+        IsInternal         = $isInternal
         IsFullCapacity     = $isFullCapacity
         HasFibersBeyond48  = $hasFibersBeyond48
-        DecisionOverridden = ($HasExplicitInternalDecision -and -not $ForceInternal -and $hasFibersBeyond48)
+        CapacityForcedByFiberData = ($hasFibersBeyond48 -and -not $ForceInternal)
     }
 }
 
@@ -2226,9 +2227,7 @@ function Build-ProjectModel {
             $incomingCable = Get-BackboneCableLabel -ProjectLabel $projectLabel -Suffix ([int]$segment.Suffix) -SegmentNumber $segmentNumber
             $outgoingCable = $null
             $forceInternal = $false
-            $hasExplicitInternalDecision = ($segments.Count -eq 1 -and $InternalDpDecisions.ContainsKey($segment.DpLabel))
-
-            if ($hasExplicitInternalDecision) {
+            if ($segments.Count -eq 1 -and $InternalDpDecisions.ContainsKey($segment.DpLabel)) {
                 $forceInternal = [bool]$InternalDpDecisions[$segment.DpLabel]
             }
 
@@ -2243,13 +2242,19 @@ function Build-ProjectModel {
                 -SegmentCount $segments.Count `
                 -SegmentIndex $index `
                 -NextSegment $nextSegment `
-                -HasExplicitInternalDecision $hasExplicitInternalDecision `
                 -ForceInternal $forceInternal
             $segmentStart = [int]$layout.SegmentStart
             $segmentEnd = [int]$layout.SegmentEnd
             $segmentSize = $segmentEnd - $segmentStart + 1
             $segmentCassettes = [math]::Ceiling($segmentSize / 12.0)
-            if ($segmentSize -gt 48) {
+            $usesInternalEquipment = if ($segments.Count -eq 1 -and [int]$segment.Stage -eq 0) {
+                [bool]$layout.IsInternal
+            }
+            else {
+                $segmentSize -gt 48
+            }
+
+            if ($usesInternalEquipment) {
                 $cassetteType = '4SE12-A'
                 $accesspointType = 'LB_BUDI-M-SP-A_TY01'
                 $spliceBoxType = 'LB_BUDI-M-SP-A_TY01'
@@ -2267,9 +2272,10 @@ function Build-ProjectModel {
             $segments[$index] | Add-Member -NotePropertyName SegmentEnd -NotePropertyValue $segmentEnd
             $segments[$index] | Add-Member -NotePropertyName SegmentSize -NotePropertyValue $segmentSize
             $segments[$index] | Add-Member -NotePropertyName SegmentCassettes -NotePropertyValue $segmentCassettes
+            $segments[$index] | Add-Member -NotePropertyName IsInternal -NotePropertyValue ([bool]$layout.IsInternal)
             $segments[$index] | Add-Member -NotePropertyName IsFullCapacity -NotePropertyValue ([bool]$layout.IsFullCapacity)
             $segments[$index] | Add-Member -NotePropertyName HasFibersBeyond48 -NotePropertyValue ([bool]$layout.HasFibersBeyond48)
-            $segments[$index] | Add-Member -NotePropertyName DecisionOverridden -NotePropertyValue ([bool]$layout.DecisionOverridden)
+            $segments[$index] | Add-Member -NotePropertyName CapacityForcedByFiberData -NotePropertyValue ([bool]$layout.CapacityForcedByFiberData)
             $segments[$index] | Add-Member -NotePropertyName CassetteType -NotePropertyValue $cassetteType
             $segments[$index] | Add-Member -NotePropertyName AccesspointType -NotePropertyValue $accesspointType
             $segments[$index] | Add-Member -NotePropertyName SpliceBoxType -NotePropertyValue $spliceBoxType
@@ -2308,10 +2314,6 @@ function Get-AmbiguousInternalDpCandidates {
             continue
         }
 
-        if ([bool]$segment.HasFibersBeyond48) {
-            continue
-        }
-
         if ($InternalDpDecisions.ContainsKey($segment.DpLabel)) {
             continue
         }
@@ -2321,7 +2323,13 @@ function Get-AmbiguousInternalDpCandidates {
             Suffix              = [int]$chain.Suffix
             Stage               = [int]$segment.Stage
             SuggestedIsInternal = $false
-            Reason              = 'La cadena solo tiene un DP visible. Sin confirmacion adicional, puede interpretarse como un DP normal de 48 fibras o como un DP interno de 96 fibras.'
+            Requires96Fibers    = [bool]$segment.HasFibersBeyond48
+            Reason              = if ([bool]$segment.HasFibersBeyond48) {
+                'Las posiciones ODF superiores a 48 obligan a construir una LAS de 96 fibras. Solo falta confirmar si el equipo fisico es externo o interno/BUDI.'
+            }
+            else {
+                'La cadena solo tiene un DP visible. Sin confirmacion adicional, puede interpretarse como un DP externo de 48 fibras o como un DP interno/BUDI de 96 fibras.'
+            }
         }
     }
 
@@ -3067,7 +3075,7 @@ $autoDetectedFullCapacityDps = @(
                 [pscustomobject]@{
                     DpLabel            = $segment.DpLabel
                     MaxFiber           = [int]$segment.MaxFiber
-                    DecisionOverridden = [bool]$segment.DecisionOverridden
+                    CapacityForcedByFiberData = [bool]$segment.CapacityForcedByFiberData
                 }
             }
         }

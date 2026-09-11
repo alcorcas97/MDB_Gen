@@ -13,7 +13,8 @@ if ($start -lt 0 -or $end -le $start) { throw 'No se pudieron cargar las funcion
 Invoke-Expression $source.Substring($start, $end - $start)
 
 $fullSegment = [pscustomobject]@{ DpLabel = 'ASD-GUR-ODP001'; Stage = 0; MinFiber = 1; MaxFiber = 93 }
-$fullLayout = Resolve-SegmentLayout -Segment $fullSegment -SegmentCount 1 -SegmentIndex 0 -NextSegment $null -HasExplicitInternalDecision $true -ForceInternal $false
+$fullLayout = Resolve-SegmentLayout -Segment $fullSegment -SegmentCount 1 -SegmentIndex 0 -NextSegment $null -ForceInternal $false
+$internalLayout = Resolve-SegmentLayout -Segment $fullSegment -SegmentCount 1 -SegmentIndex 0 -NextSegment $null -ForceInternal $true
 $fullSegment | Add-Member SegmentStart $fullLayout.SegmentStart
 $fullSegment | Add-Member SegmentEnd $fullLayout.SegmentEnd
 $fullSegment | Add-Member SegmentCassettes 8
@@ -31,12 +32,14 @@ $secondHalf = @($las | Where-Object { $_.KabelB -eq 'K-ASD-GUR-ODP101-KA01' } | 
 $ambiguous = @(Get-AmbiguousInternalDpCandidates -Model $model)
 
 $normalSegment = [pscustomobject]@{ Stage = 0; MinFiber = 1; MaxFiber = 45 }
-$normalLayout = Resolve-SegmentLayout -Segment $normalSegment -SegmentCount 1 -SegmentIndex 0 -NextSegment $null -HasExplicitInternalDecision $false -ForceInternal $false
+$normalLayout = Resolve-SegmentLayout -Segment $normalSegment -SegmentCount 1 -SegmentIndex 0 -NextSegment $null -ForceInternal $false
 
 [pscustomobject]@{
     Full = $fullLayout
+    Internal = $internalLayout
     Normal = $normalLayout
     AmbiguousCount = $ambiguous.Count
+    AmbiguousRequires96 = $ambiguous[0].Requires96Fibers
     SecondHalfRows = @($secondHalf | ForEach-Object {
         [pscustomobject]@{ Cassette = $_.Cassette; Position = $_.Positienr; FiberB = $_.VezelnrB; FiberA = $_.VezelnrA }
     })
@@ -61,8 +64,12 @@ test('a single physical DP with fibres above 48 uses the full 96-fibre LAS layou
   assert.equal(result.Full.SegmentStart, 1);
   assert.equal(result.Full.SegmentEnd, 96);
   assert.equal(result.Full.IsFullCapacity, true);
-  assert.equal(result.Full.DecisionOverridden, true);
-  assert.equal(result.AmbiguousCount, 0);
+  assert.equal(result.Full.IsInternal, false);
+  assert.equal(result.Full.CapacityForcedByFiberData, true);
+  assert.equal(result.Internal.IsInternal, true);
+  assert.equal(result.Internal.IsFullCapacity, true);
+  assert.equal(result.AmbiguousCount, 1);
+  assert.equal(result.AmbiguousRequires96, true);
   assert.deepEqual(result.SecondHalfRows, [
     { Cassette: 13, Position: 1, FiberB: 1, FiberA: 49 },
     { Cassette: 5, Position: 1, FiberB: 2, FiberA: 0 }

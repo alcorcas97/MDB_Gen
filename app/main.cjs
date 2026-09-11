@@ -2393,13 +2393,10 @@ async function resolveAmbiguousInternalDps(analysis) {
     : [];
 
   for (const item of autoDetected) {
-    const suffix = item?.DecisionOverridden
-      ? ' Se ha ignorado una decisión anterior de 48 fibras porque truncaría datos.'
-      : '';
     sendGenerationEvent({
       type: 'log',
       level: 'info',
-      message: `${String(item?.DpLabel ?? 'DP')}: detectado automáticamente como cabecera de 96 fibras (posición máxima ${Number(item?.MaxFiber ?? 0)}).${suffix}\n`
+      message: `${String(item?.DpLabel ?? 'DP')}: LAS de 96 fibras detectada automáticamente por las posiciones ODF (posición máxima ${Number(item?.MaxFiber ?? 0)}). El tipo físico se confirmará por separado.\n`
     });
   }
 
@@ -2416,12 +2413,17 @@ async function resolveAmbiguousInternalDps(analysis) {
       message: `Confirmacion requerida para ${dpLabel}.`
     });
 
+    const requires96Fibers = Boolean(candidate?.Requires96Fibers);
     const response = await dialog.showMessageBox(mainWindow, {
       type: 'question',
       title: 'Confirmar DP interno',
-      message: `${dpLabel}: ¿debe tratarse como DP interno?`,
-      detail: `${candidate.Reason}\n\nSi eliges "No", la generacion usara 48 fibras. Si eliges "Si", se tratara como interno/BUDI de 96 fibras.`,
-      buttons: ['No, es externo (48 fibras)', 'Si, es interno (96 fibras)', 'Cancelar'],
+      message: `${dpLabel}: ¿el equipo físico es interno/BUDI?`,
+      detail: requires96Fibers
+        ? `${candidate.Reason}\n\nLa LAS seguirá siendo de 96 fibras con cualquiera de las dos respuestas.`
+        : `${candidate.Reason}\n\nEl DP externo usará 48 fibras; el interno/BUDI usará 96 fibras.`,
+      buttons: requires96Fibers
+        ? ['No, es externo', 'Sí, es interno/BUDI', 'Cancelar']
+        : ['No, es externo (48 fibras)', 'Sí, es interno/BUDI (96 fibras)', 'Cancelar'],
       defaultId: 0,
       cancelId: 2,
       noLink: true
@@ -2439,7 +2441,7 @@ async function resolveAmbiguousInternalDps(analysis) {
     sendGenerationEvent({
       type: 'log',
       level: 'info',
-      message: `${dpLabel}: ${isInternal ? 'marcado como interno/BUDI (96 fibras).' : 'marcado como externo/normal (48 fibras).'}\n`
+      message: `${dpLabel}: ${isInternal ? 'marcado como interno/BUDI.' : 'marcado como externo.'}${requires96Fibers ? ' La LAS se mantiene en 96 fibras por el orden ODF.' : ` Se usarán ${isInternal ? 96 : 48} fibras.`}\n`
     });
   }
 

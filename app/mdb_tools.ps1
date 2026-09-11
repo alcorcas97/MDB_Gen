@@ -680,7 +680,12 @@ function Move-ResvCoordinatesToDp {
             $x = Convert-ToNullableDouble $accesspointRecordset.Fields('X').Value
             $y = Convert-ToNullableDouble $accesspointRecordset.Fields('Y').Value
 
-            if ($null -ne $label -and $null -ne $x -and $null -ne $y) {
+            if (
+                $null -ne $label -and
+                $null -ne $x -and
+                $null -ne $y -and
+                ([math]::Abs([double]$x) -gt 0.000001 -or [math]::Abs([double]$y) -gt 0.000001)
+            ) {
                 $dpCoordinates[$label] = [pscustomobject]@{
                     X = [double]$x
                     Y = [double]$y
@@ -695,7 +700,7 @@ function Move-ResvCoordinatesToDp {
         [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($accesspointRecordset)
     }
 
-    $recordset = $Database.OpenRecordset("SELECT [ID], [Kabel], [Kastnr], [X], [Y] FROM [Klant] WHERE UCASE([Kastnr]) = 'RESV'")
+    $recordset = $Database.OpenRecordset('SELECT [ID], [Kabel], [Kastnr], [X], [Y] FROM [Klant]')
     $resvRows = 0
     $updatedRows = 0
     $unchangedRows = 0
@@ -703,6 +708,11 @@ function Move-ResvCoordinatesToDp {
 
     try {
         while (-not $recordset.EOF) {
+            if ((Normalize-UpperStatus $recordset.Fields('Kastnr').Value) -ne 'RESV') {
+                $recordset.MoveNext()
+                continue
+            }
+
             $resvRows++
             $customerId = [int]$recordset.Fields('ID').Value
             $kabelLabel = Normalize-Text $recordset.Fields('Kabel').Value
