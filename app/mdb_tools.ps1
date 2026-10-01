@@ -3096,23 +3096,38 @@ function Apply-PartialDelivery {
         $newCableId = Normalize-Text $edit.kabelId
         $newDp = Normalize-Text $edit.dpLabel
         if ($null -eq $newDp) {
-            $dpMatch = [regex]::Match($newCableId, '^(?:K-)?(.+?-DP\d+)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            $dpMatch = [regex]::Match($newCableId, '^(?:K-)?(.+?-(?:O?DP)\d+)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
             if ($dpMatch.Success) { $newDp = $dpMatch.Groups[1].Value }
         }
         if ($null -eq $newDp) { throw "La conexion nueva $newCableId no tiene DP identificable en el BC." }
         $newStatus = Normalize-UpperStatus $edit.status
         if ($null -eq $newStatus) { $newStatus = Resolve-StatusLocation -DeliveryStatus (Normalize-Text $edit.statusCode) -CurrentLocation $null -PreferredLocation $null }
+        $newStatusCode = Normalize-Text $edit.statusCode
+        $newIsTerminated = if ($null -ne $newStatusCode) {
+            $newStatusCode -eq '2'
+        }
+        else {
+            $newStatus -in @('MTK', 'WNK', 'ANDE', 'KLDR')
+        }
         $newHouseNumber = 0
         $houseNumberText = Normalize-Text $edit.houseNumber
         if ($null -ne $houseNumberText) { [void][int]::TryParse($houseNumberText, [ref]$newHouseNumber) }
-        $newAddressParts = @((Normalize-Text $edit.postcode), (Normalize-Text $edit.houseNumber), (Normalize-Text $edit.houseSuffix)) | Where-Object { $null -ne $_ }
+        $newAddressParts = @(
+            (Normalize-Text $edit.postcode),
+            (Normalize-Text $edit.houseNumber),
+            (Normalize-Text $edit.houseSuffix),
+            (Normalize-Text $edit.room)
+        ) | Where-Object { $null -ne $_ }
         $newAddress = ($newAddressParts -join '-').ToUpperInvariant()
         $newCustomer = [pscustomobject]@{
             ID = 0; Postcode = Normalize-Text $edit.postcode; Huisnr = $newHouseNumber; Toevoeging = Normalize-Text $edit.houseSuffix;
-            Kastnr = $newStatus; FTUType = if ($newStatus -eq 'GV') { $null } else { Normalize-Text $edit.ftuType }; Kabel = $newCableId; VEZELNR1 = 1;
-            Dempingswaarde1A = Convert-ToDempingText $edit.demping1A; Specificatie1A = $null; Dempingswaarde1Z = Convert-ToDempingText $edit.demping1Z;
-            Specificatie1Z = $null; Vezelnr2 = $null; Dempingswaarde2A = Convert-ToDempingText $edit.demping2A; Specificatie2A = $null;
-            Dempingswaarde2Z = Convert-ToDempingText $edit.demping2Z; Specificatie2Z = $null; X = 0; Y = 0; ImportResult = $null;
+            Kastnr = $newStatus; FTUType = if ($newIsTerminated) { Normalize-Text $edit.ftuType } else { $null }; Kabel = $newCableId; VEZELNR1 = 1;
+            Dempingswaarde1A = if ($newIsTerminated) { Convert-ToDempingText $edit.demping1A } else { $null }; Specificatie1A = $null;
+            Dempingswaarde1Z = if ($newIsTerminated) { Convert-ToDempingText $edit.demping1Z } else { $null };
+            Specificatie1Z = $null; Vezelnr2 = $null;
+            Dempingswaarde2A = if ($newIsTerminated) { Convert-ToDempingText $edit.demping2A } else { $null }; Specificatie2A = $null;
+            Dempingswaarde2Z = if ($newIsTerminated) { Convert-ToDempingText $edit.demping2Z } else { $null };
+            Specificatie2Z = $null; X = 0; Y = 0; ImportResult = $null;
             COMPLEX = Normalize-Text $edit.complex; KAMER = Normalize-Text $edit.room; ALIASNAAM = $null; FTU_SERIENUMMER = $null
         }
         $newCable = [pscustomobject]@{
@@ -3178,8 +3193,26 @@ function Apply-PartialDelivery {
         $customerCableId = Normalize-Text $customer.Kabel
         if ($null -eq $customerCableId -or -not $editLookup.ContainsKey($customerCableId.ToUpperInvariant())) { continue }
         $edit = $editLookup[$customerCableId.ToUpperInvariant()]
-        if ($edit.PSObject.Properties.Name -contains 'status') { $customer.Kastnr = Normalize-UpperStatus $edit.status; if ($customer.Kastnr -eq 'GV') { $customer.FTUType = $null } }
-        if ($edit.PSObject.Properties.Name -contains 'ftuType') { $customer.FTUType = Normalize-Text $edit.ftuType }
+        if ($edit.PSObject.Properties.Name -contains 'postcode') { $customer.Postcode = Normalize-Text $edit.postcode }
+        if ($edit.PSObject.Properties.Name -contains 'houseNumber') {
+            $houseNumber = 0
+            [void][int]::TryParse((Normalize-Text $edit.houseNumber), [ref]$houseNumber)
+            $customer.Huisnr = $houseNumber
+        }
+        if ($edit.PSObject.Properties.Name -contains 'houseSuffix') { $customer.Toevoeging = Normalize-Text $edit.houseSuffix }
+        if ($edit.PSObject.Properties.Name -contains 'room') { $customer.KAMER = Normalize-Text $edit.room }
+        if ($edit.PSObject.Properties.Name -contains 'complex') { $customer.COMPLEX = Normalize-Text $edit.complex }
+        if ($edit.PSObject.Properties.Name -contains 'status') { $customer.Kastnr = Normalize-UpperStatus $edit.status }
+        $editStatusCode = Normalize-Text $edit.statusCode
+        $isTerminatedCustomer = if ($null -ne $editStatusCode) {
+            $editStatusCode -eq '2'
+        }
+        else {
+            (Normalize-UpperStatus $customer.Kastnr) -in @('MTK', 'WNK', 'ANDE', 'KLDR')
+        }
+        if ($edit.PSObject.Properties.Name -contains 'ftuType') {
+            $customer.FTUType = if ($isTerminatedCustomer) { Normalize-Text $edit.ftuType } else { $null }
+        }
         foreach ($mapping in @(
             @{ Json = 'demping1A'; Field = 'Dempingswaarde1A' },
             @{ Json = 'demping1Z'; Field = 'Dempingswaarde1Z' },
@@ -3187,12 +3220,28 @@ function Apply-PartialDelivery {
             @{ Json = 'demping2Z'; Field = 'Dempingswaarde2Z' }
         )) {
             if ($edit.PSObject.Properties.Name -contains $mapping.Json) {
-                $customer.($mapping.Field) = Convert-ToDempingText $edit.($mapping.Json)
+                $customer.($mapping.Field) = if ($isTerminatedCustomer) { Convert-ToDempingText $edit.($mapping.Json) } else { $null }
             }
         }
 
         $cable = @($allCables | Where-Object { $label = Normalize-Text $_.Label; $null -ne $label -and $label.ToUpperInvariant() -eq $customerCableId.ToUpperInvariant() } | Select-Object -First 1)
         if (@($cable).Count -gt 0) {
+            if ($edit.PSObject.Properties.Name -contains 'dpLabel') {
+                $dpLabel = Normalize-Text $edit.dpLabel
+                if ($null -ne $dpLabel) {
+                    $cable[0].Locatienaam_A = $dpLabel
+                    $cable[0].Afwerkeenheid_A = $dpLabel
+                }
+            }
+            $addressParts = @(
+                (Normalize-Text $edit.postcode),
+                (Normalize-Text $edit.houseNumber),
+                (Normalize-Text $edit.houseSuffix),
+                (Normalize-Text $edit.room)
+            ) | Where-Object { $null -ne $_ }
+            if (@($addressParts).Count -gt 0) {
+                $cable[0].Locatienaam_B = ($addressParts -join '-').ToUpperInvariant()
+            }
             if ($edit.PSObject.Properties.Name -contains 'kabelType') {
                 $cable[0].Kabeltype = Normalize-Text $edit.kabelType
             }

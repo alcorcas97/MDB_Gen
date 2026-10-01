@@ -12,7 +12,7 @@ const elements = {
   ftuTypeOptions: document.getElementById('ftuTypeOptions'), generateButton: document.getElementById('generateButton'), openOutputButton: document.getElementById('openOutputButton'),
   drawCoordinatesButton: document.getElementById('drawCoordinatesButton'), clearCoordinatesButton: document.getElementById('clearCoordinatesButton'), extractCoordinatesButton: document.getElementById('extractCoordinatesButton'), logOutput: document.getElementById('logOutput')
 };
-const state = { connections: [], selected: new Map(), loadedSource: '', running: false, lastOutput: null };
+const state = { connections: [], selected: new Map(), loadedSource: '', refreshFcPath: '', refreshBcPath: '', running: false, lastOutput: null };
 
 function normalize(value) { return String(value ?? '').replace(/[\u00A0\u202F]/g, ' ').trim(); }
 function key(value) { return normalize(value).replace(/\s+/g, '').toUpperCase().replace(/^K-/, ''); }
@@ -64,11 +64,13 @@ function resolveBcStatus(statusCode, currentValue) {
 }
 
 function applyBcRow(target, row) {
+  target.phkt = row.phkt; target.postcode = row.postcode; target.houseNumber = row.houseNumber; target.houseSuffix = row.houseSuffix; target.room = row.room;
+  target.dpLabel = row.dpLabel; target.buildingType = row.buildingType;
   target.bcStatusCode = row.statusCode; target.bcFiber = row.fiber; target.bcOdf = row.odf; target.bcStrengId = row.strengId;
   target.kastnr = resolveBcStatus(row.statusCode, target.kastnr);
-  if (target.kastnr === 'GV') target.ftuType = '';
-  else if (row.ftuType) target.ftuType = row.ftuType;
-  if (row.fiber !== null && row.fiber !== undefined && row.fiber !== '') target.fiber = row.fiber;
+  target.ftuType = normalize(row.statusCode) === '2' ? (row.ftuType ?? '') : '';
+  target.fiber = row.fiber;
+  if (normalize(row.statusCode) !== '2') target.demping1A = target.demping1Z = target.demping2A = target.demping2Z = null;
 }
 
 function renderFtuOptions() {
@@ -135,10 +137,9 @@ function mergeFcRows(rows) {
     if (!existing) { unmatched++; continue; }
     for (const target of [existing, state.selected.get(key(row.kabelId))].filter(Boolean)) {
       if (row.ftuLocation) {
-        target.kastnr = normalize(row.ftuLocation).toUpperCase();
-        if (target.kastnr === 'GV') target.ftuType = '';
+        target.kastnr = resolveBcStatus(target.bcStatusCode, row.ftuLocation);
       }
-      if (row.measurement) target.demping1A = normalizeDemping(row.measurement);
+      target.demping1A = normalize(target.bcStatusCode) === '2' ? normalizeDemping(row.measurement) : null;
     }
     enriched++;
   }
@@ -146,16 +147,18 @@ function mergeFcRows(rows) {
   return { enriched, unmatched };
 }
 
-async function loadProject() {
+async function loadProject({ fcPath = state.refreshFcPath, bcPath = state.refreshBcPath } = {}) {
   const projectFolderPath = normalize(elements.sourceProjectPath.value);
   if (!projectFolderPath) { setStatus('Selecciona la carpeta del proyecto completo.', 'warning'); return; }
   setBusy(true); setStatus('Leyendo conexiones del MDB...', 'neutral');
   try {
-    const data = await api.loadPartialDeliveryProject({ projectFolderPath });
+    const data = await api.loadPartialDeliveryProject({ projectFolderPath, fcPath, bcPath });
     state.connections = Array.isArray(data.connections) ? data.connections : [];
     state.selected.clear();
-    for (const item of data.existingConnections ?? []) state.selected.set(key(item.kabelId), { ...item });
+    const existingCableIds = new Set((data.existingConnections ?? []).map((item) => key(item.kabelId)));
+    for (const item of state.connections) if (existingCableIds.has(key(item.kabelId))) state.selected.set(key(item.kabelId), { ...item });
     state.loadedSource = data.sourceProjectPath; state.lastOutput = null;
+    state.refreshFcPath = fcPath; state.refreshBcPath = bcPath;
     elements.sourceProjectPath.value = data.sourceProjectPath;
     elements.targetProjectPath.value = data.targetProjectPath;
     elements.backupFolderPath.value = data.backupFolderPath;
@@ -163,7 +166,7 @@ async function loadProject() {
     const existingCount = Array.isArray(data.existingConnections) ? data.existingConnections.length : 0;
     setStatus(`${data.totalConnections} conexiones disponibles; ${existingCount} ya incluidas en el Partial Delivery existente.`, 'success');
     appendLog(`Proyecto cargado: ${data.sourceProjectPath}`, 'success');
-    if (existingCount) appendLog(`Partial Delivery existente cargado: ${existingCount} conexiones. Las nuevas se añadirán a este total.`, 'success');
+    if (existingCount) appendLog(`Partial Delivery existente resuelto contra las conexiones frescas: ${state.selected.size} Kabel ID preseleccionados.`, 'success');
   } catch (error) { const message = error instanceof Error ? error.message : String(error); setStatus(message, 'error'); appendLog(message, 'error'); }
   finally { setBusy(false); }
 }
@@ -291,7 +294,12 @@ elements.clearCoordinatesButton.addEventListener('click', () => void runCoordina
 elements.extractCoordinatesButton.addEventListener('click', () => void runCoordinateTool('extract'));
 api.onPartialDeliveryEvent((event) => { if (event?.message) { setStatus(event.message, event.stage === 'done' ? 'success' : 'neutral'); appendLog(event.message, event.stage === 'done' ? 'success' : 'info'); } });
 
-const initialPath = new URLSearchParams(window.location.search).get('projectFolderPath') ?? '';
+const initialQuery = new URLSearchParams(window.location.search);
+const initialPath = initialQuery.get('projectFolderPath') ?? '';
+const initialFcPath = initialQuery.get('fcPath') ?? '';
+const initialBcPath = initialQuery.get('bcPath') ?? '';
 elements.sourceProjectPath.value = initialPath;
 renderSelected(); renderSearchResults(); setBusy(false);
-if (normalize(initialPath)) void loadProject();
+if (normalize(initialPath)) {
+  void loadProject({ fcPath: initialFcPath, bcPath: initialBcPath });
+}

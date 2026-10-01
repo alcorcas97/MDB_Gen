@@ -1066,7 +1066,9 @@ async function applyGlaspoortProject() {
 async function openPartialDeliveryWindow() {
   try {
     await fiberDesktopApi.openPartialDeliveryWindow({
-      projectFolderPath: elements.projectFolderPath.value.trim()
+      projectFolderPath: elements.projectFolderPath.value.trim(),
+      fcPath: elements.fcPath.value.trim(),
+      bcPath: elements.bcPath.value.trim()
     });
     appendLog('Ventana Partial Delivery abierta.', 'meta');
   }

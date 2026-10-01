@@ -8,7 +8,8 @@ const path = require('node:path');
 const {
   buildNextPartialProjectName,
   parseBcCsv,
-  parseFcRows
+  parseFcRows,
+  refreshPartialConnections
 } = require('./lib/partial-delivery.cjs');
 const {
   applyFtuReviewDecision,
@@ -474,7 +475,11 @@ function openPartialDeliveryWindow(payload = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) {
     throw new Error('La ventana principal no esta disponible.');
   }
-  const query = { projectFolderPath: String(payload.projectFolderPath ?? '').trim() };
+  const query = {
+    projectFolderPath: String(payload.projectFolderPath ?? '').trim(),
+    fcPath: String(payload.fcPath ?? '').trim(),
+    bcPath: String(payload.bcPath ?? '').trim()
+  };
   if (partialDeliveryWindow && !partialDeliveryWindow.isDestroyed()) {
     void partialDeliveryWindow.loadFile(path.join(__dirname, 'partial-delivery.html'), { query });
     partialDeliveryWindow.show();
@@ -1924,8 +1929,8 @@ async function copySelectedComplexFolders(sourceProjectPath, targetProjectPath, 
   return { copied, missing };
 }
 
-async function loadPartialDeliveryProject(inputPath) {
-  const sourceProjectPath = await resolvePartialSourceProjectPath(inputPath);
+async function loadPartialDeliveryProject(payload = {}) {
+  const sourceProjectPath = await resolvePartialSourceProjectPath(payload.projectFolderPath);
   const mdbPath = await resolveProjectWorkingMdbPath(sourceProjectPath);
   const data = await runMdbToolsJson(['-Mode', 'ExportPartialDeliveryData', '-MdbPath', mdbPath]);
   const targetProjectPath = path.join(path.dirname(sourceProjectPath), buildNextPartialProjectName(path.basename(sourceProjectPath)));
@@ -1940,8 +1945,15 @@ async function loadPartialDeliveryProject(inputPath) {
       existingConnections = [];
     }
   }
+  const bcPath = String(payload.bcPath ?? '').trim();
+  const fcPath = String(payload.fcPath ?? '').trim();
+  const bcRows = bcPath ? parseBcCsv(await fsp.readFile(path.resolve(bcPath), 'utf8')) : [];
+  const fcRows = fcPath ? parseFcRows(await getCrossCheckToolsModule().readFcRows(path.resolve(fcPath))) : [];
+  const connections = refreshPartialConnections(data.connections, bcRows, fcRows);
   return {
     ...data,
+    connections,
+    totalConnections: connections.length,
     sourceProjectPath,
     sourceMdbPath: mdbPath,
     targetProjectPath,
@@ -1963,29 +1975,7 @@ async function generatePartialDelivery(payload) {
     throw new Error('La carpeta de salida no puede contener el origen ni estar dentro de el.');
   }
   const existingTargetProject = await pathExists(targetProjectPath);
-  let connections = (payload?.connections ?? []).filter((item) => String(item?.kabelId ?? '').trim());
-  if (existingTargetProject) {
-    const existingMdbPath = await resolveProjectWorkingMdbPath(targetProjectPath);
-    const existingData = await runMdbToolsJson(['-Mode', 'ExportPartialDeliveryData', '-MdbPath', existingMdbPath]);
-    const merged = new Map();
-    for (const item of existingData?.connections ?? []) {
-      const kabelId = String(item?.kabelId ?? '').trim();
-      if (!kabelId) continue;
-      merged.set(kabelId.toUpperCase(), {
-        kabelId, status: item.kastnr ?? null, ftuType: item.ftuType ?? null,
-        demping1A: item.demping1A ?? null, demping1Z: item.demping1Z ?? null,
-        demping2A: item.demping2A ?? null, demping2Z: item.demping2Z ?? null,
-        postcode: item.postcode ?? null, houseNumber: item.houseNumber ?? null, houseSuffix: item.houseSuffix ?? null,
-        room: item.room ?? null, complex: item.complex ?? null, dpLabel: item.dpLabel ?? null, statusCode: null,
-        kabelType: item.kabelType ?? null,
-        fiber: item.fiber ?? null, cassette: item.cassette ?? null, cassettePosition: item.cassettePosition ?? null,
-        parkingCassette: item.parkingCassette ?? null, parkingPosition: item.parkingPosition ?? null,
-        odf: null, strengId: null, buildingType: null
-      });
-    }
-    for (const item of connections) merged.set(String(item.kabelId).trim().toUpperCase(), item);
-    connections = [...merged.values()];
-  }
+  const connections = (payload?.connections ?? []).filter((item) => String(item?.kabelId ?? '').trim());
   const cableIds = [...new Set(connections.map((item) => String(item.kabelId).trim()))];
   if (cableIds.length === 0) throw new Error('Selecciona al menos una conexion.');
 
@@ -2668,7 +2658,7 @@ ipcMain.handle('partial-delivery:open-window', async (_event, payload) => {
 });
 
 ipcMain.handle('partial-delivery:load-project', async (_event, payload) => (
-  loadPartialDeliveryProject(payload?.projectFolderPath)
+  loadPartialDeliveryProject(payload)
 ));
 
 ipcMain.handle('partial-delivery:read-list', async (_event, payload) => {
