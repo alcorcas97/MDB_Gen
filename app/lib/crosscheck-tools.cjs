@@ -135,18 +135,27 @@ function clearColumns(sheet, startRow, columnsToClear) {
 
     for (const columnIndex of columnsToClear) {
       const cell = row._cells[columnIndex];
-      if (cell && !cell.formula() && cell.value() !== undefined) {
+      if (cell && !hasProtectedYellowFormula(cell) && (cell.formula() || cell.value() !== undefined)) {
         cell.clear();
       }
     }
   });
 }
 
+function hasProtectedYellowFormula(cell) {
+  if (!cell.formula()) {
+    return false;
+  }
+
+  const fill = cell.style('fill');
+  return fill?.type === 'solid' && fill.color?.rgb?.toUpperCase() === 'FFFFFF00';
+}
+
 function setCellValue(sheet, rowIndex, columnIndex, value) {
   const cell = sheet.cell(rowIndex, columnIndex);
 
-  // Template formulas, including hidden helper cells, are owned by the template.
-  if (cell.formula()) {
+  // Only explicitly yellow formula cells are manual template overrides.
+  if (hasProtectedYellowFormula(cell)) {
     return;
   }
 
@@ -344,8 +353,10 @@ function extendFormulaSeries(sheet, startRow, lastDataRow, columns) {
 
 function extendRequiredFormulaSeries(workbook, tableRows) {
   const configurations = [
-    { sheet: 'Kabel', startRow: 2, rows: tableRows.Kabel ?? [], columns: [2, 3, 4, 5, 7, 8, 16] },
-    { sheet: 'Klant', startRow: 2, rows: tableRows.Klant ?? [], columns: [1, 2, 3, 4, 9, 10, 11, 13, 22] },
+    { sheet: 'ODF', startRow: 2, rows: tableRows.ODF ?? [], columns: [1, 2] },
+    { sheet: 'AfwerkODF', startRow: 2, rows: tableRows.AfwerkODF ?? [], columns: [16] },
+    { sheet: 'Kabel', startRow: 2, rows: tableRows.Kabel ?? [], columns: [16] },
+    { sheet: 'Klant', startRow: 2, rows: tableRows.Klant ?? [], columns: [1, 2, 3, 4] },
     { sheet: 'LAS', startRow: 3, rows: tableRows.Las ?? [], columns: [15] }
   ];
 
@@ -355,6 +366,56 @@ function extendRequiredFormulaSeries(workbook, tableRows) {
       configuration.startRow,
       configuration.startRow + configuration.rows.length - 1,
       configuration.columns
+    );
+  }
+}
+
+const REQUIRED_ACCESSPOINT_LOOKUPS = [
+  ['Kabelmanteleinde', 0],
+  ['RC_OFDR-I_TY01', -60]
+];
+
+function ensureAccesspointLookup(sheet) {
+  const existingTypes = new Set();
+  let lastLookupRow = 1;
+
+  sheet._rows.forEach((row, rowIndex) => {
+    if (!row || rowIndex < 2) {
+      return;
+    }
+
+    const typeCell = row._cells[24];
+    const depthCell = row._cells[25];
+    const type = typeCell && normalizeText(typeCell.value());
+    if (type) {
+      existingTypes.add(type.toUpperCase());
+    }
+    if (type || (depthCell && (depthCell.formula() || depthCell.value() !== undefined))) {
+      lastLookupRow = rowIndex;
+    }
+  });
+
+  for (const [type, depth] of REQUIRED_ACCESSPOINT_LOOKUPS) {
+    if (existingTypes.has(type.toUpperCase())) {
+      continue;
+    }
+
+    lastLookupRow += 1;
+    sheet.cell(lastLookupRow, 24).value(type);
+    sheet.cell(lastLookupRow, 25).value(depth);
+    existingTypes.add(type.toUpperCase());
+  }
+
+  return lastLookupRow;
+}
+
+function writeAccesspointChecks(sheet, rowCount, lookupLastRow) {
+  const startRow = 2;
+  const lastDataRow = startRow + rowCount - 1;
+
+  for (let rowIndex = startRow; rowIndex <= lastDataRow; rowIndex += 1) {
+    sheet.cell(rowIndex, 1).formula(
+      `IF(D${rowIndex}="","",_xlfn.IFNA(IF(_xlfn.XLOOKUP(D${rowIndex},$X$2:$X$${lookupLastRow},$Y$2:$Y$${lookupLastRow})=G${rowIndex},"V","wrong depth"),"wrong type"))`
     );
   }
 }
@@ -376,6 +437,9 @@ async function exportCrossCheckWorkbook({
 
   const workbook = await XlsxPopulate.fromFileAsync(resolvedTemplatePath);
   extendRequiredFormulaSeries(workbook, tableRows);
+  const accesspointSheet = workbook.sheet('Accesspoint');
+  const accesspointLookupLastRow = ensureAccesspointLookup(accesspointSheet);
+  writeAccesspointChecks(accesspointSheet, (tableRows.Accesspoint ?? []).length, accesspointLookupLastRow);
 
   writeMappedRows(workbook.sheet('FC'), 2, fcRows, Array.from({ length: 22 }, (_value, index) => index + 5), (row) => ({
     5: getRowValue(row, 'Projectnummer'),

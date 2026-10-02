@@ -26,6 +26,7 @@ const {
 const appRoot = path.resolve(__dirname, '..');
 const generatorScriptPath = path.join(appRoot, 'generate_mdb.ps1');
 const mdbToolsScriptPath = path.join(appRoot, 'app', 'mdb_tools.ps1');
+const recalculateExcelScriptPath = path.join(appRoot, 'app', 'recalculate_excel.ps1');
 const bundledTemplatePath = path.join(appRoot, 'template.mdb');
 const bundledCrossCheckTemplatePath = path.join(appRoot, 'app', 'assets', 'Address cross check Cocon delivery 4.0.xlsx');
 const windowIconPath = path.join(appRoot, 'app', 'assets', 'icon.png');
@@ -2174,6 +2175,28 @@ async function runPowerShellJson(scriptPath, scriptArgs) {
   return JSON.parse(normalizedTranscript);
 }
 
+async function recalculateCrossCheckWorkbook(workbookPath) {
+  try {
+    const { transcript } = await runPowerShellFile(recalculateExcelScriptPath, [
+      '-WorkbookPath',
+      workbookPath
+    ], {
+      forwardOutput: false
+    });
+    const message = String(transcript ?? '').trim();
+    if (message.startsWith('WARNING:')) {
+      sendGenerationEvent({ type: 'log', level: 'warning', message: `${message}\n` });
+    }
+  }
+  catch (error) {
+    sendGenerationEvent({
+      type: 'log',
+      level: 'warning',
+      message: `No se pudo iniciar el recálculo con Excel; se conserva el XLSX con recálculo al abrir. ${error.message}\n`
+    });
+  }
+}
+
 async function runMdbToolsJson(scriptArgs, options = {}) {
   const mode = getScriptArgument(scriptArgs, '-Mode');
   const mdbPath = getScriptArgument(scriptArgs, '-MdbPath');
@@ -2238,6 +2261,7 @@ async function exportCrossCheckWorkbook(payload) {
     bcPath: payload.bcPath,
     tableRows
   });
+  await recalculateCrossCheckWorkbook(result.outputPath);
 
   return {
     mdbPath: result.mdbPath ?? workingMdbPath,
