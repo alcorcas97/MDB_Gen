@@ -126,25 +126,29 @@ function clearColumns(sheet, startRow, columnsToClear) {
     return;
   }
 
-  const usedRange = sheet.usedRange();
-  if (!usedRange) {
-    return;
-  }
-
-  const endRow = usedRange.endCell().rowNumber();
-  if (!Number.isFinite(endRow) || endRow < startRow) {
-    return;
-  }
-
-  for (let rowIndex = startRow; rowIndex <= endRow; rowIndex += 1) {
-    for (const columnIndex of columnsToClear) {
-      sheet.cell(rowIndex, columnIndex).clear();
+  // Do not use usedRange(): some templates declare all Excel rows in their
+  // dimension. Only existing mapped cells can contain stale export values.
+  sheet._rows.forEach((row, rowIndex) => {
+    if (!row || rowIndex < startRow) {
+      return;
     }
-  }
+
+    for (const columnIndex of columnsToClear) {
+      const cell = row._cells[columnIndex];
+      if (cell && !cell.formula() && cell.value() !== undefined) {
+        cell.clear();
+      }
+    }
+  });
 }
 
 function setCellValue(sheet, rowIndex, columnIndex, value) {
   const cell = sheet.cell(rowIndex, columnIndex);
+
+  // Template formulas, including hidden helper cells, are owned by the template.
+  if (cell.formula()) {
+    return;
+  }
 
   if (typeof value === 'string') {
     value = normalizeText(value);
@@ -172,6 +176,189 @@ function writeMappedRows(sheet, startRow, rows, clearCols, mapper) {
   }
 }
 
+function forceFullCalculationOnOpen(workbook) {
+  const workbookNode = workbook._node;
+  if (!workbookNode || !Array.isArray(workbookNode.children)) {
+    return;
+  }
+
+  let calcPr = workbookNode.children.find((node) => node.name === 'calcPr');
+  if (!calcPr) {
+    calcPr = { name: 'calcPr', attributes: {}, children: [] };
+    workbookNode.children.push(calcPr);
+  }
+
+  calcPr.attributes = {
+    ...calcPr.attributes,
+    calcMode: 'auto',
+    fullCalcOnLoad: '1',
+    forceFullCalc: '1'
+  };
+}
+
+function compactTrailingEmptyRows(workbook) {
+  for (const sheet of workbook.sheets()) {
+    let lastContentRow = 0;
+
+    sheet._rows.forEach((row, rowIndex) => {
+      if (!row) {
+        return;
+      }
+
+      const hasContent = row._cells.some((cell) => cell && (cell.formula() || cell.value() !== undefined));
+      if (hasContent) {
+        lastContentRow = rowIndex;
+      }
+    });
+
+    if (sheet._rows.length > lastContentRow + 1) {
+      sheet._rows.length = lastContentRow + 1;
+      sheet._sheetDataNode.children = sheet._rows;
+    }
+  }
+}
+
+function translateFormulaRows(formula, rowOffset) {
+  let translated = '';
+  let index = 0;
+
+  while (index < formula.length) {
+    if (formula[index] === '"') {
+      let endQuote = index + 1;
+      while (endQuote < formula.length) {
+        if (formula[endQuote] !== '"') {
+          endQuote += 1;
+          continue;
+        }
+
+        if (formula[endQuote + 1] === '"') {
+          endQuote += 2;
+          continue;
+        }
+
+        break;
+      }
+
+      if (endQuote >= formula.length) {
+        return formula;
+      }
+
+      translated += formula.slice(index, endQuote + 1);
+      index = endQuote + 1;
+      continue;
+    }
+
+    if (index > 0 && /[A-Za-z0-9_.]/.test(formula[index - 1])) {
+      translated += formula[index];
+      index += 1;
+      continue;
+    }
+
+    const reference = formula.slice(index).match(/^(?:(?:'[^']+'|[A-Za-z_][A-Za-z0-9_.]*)!)?(\$?[A-Z]{1,3})(\$?)(\d+)(?![A-Z0-9_])/);
+    if (!reference) {
+      translated += formula[index];
+      index += 1;
+      continue;
+    }
+
+    const [address, column, absoluteRow, row] = reference;
+    translated += absoluteRow ? address : address.slice(0, -row.length) + (Number(row) + rowOffset);
+    index += address.length;
+  }
+
+  return translated;
+}
+
+function findDenseFormulaSeries(sheet, columnIndex, startRow) {
+  let activeSeries = null;
+  let latestSeries = null;
+
+  sheet._rows.forEach((row, rowIndex) => {
+    if (!row || rowIndex < startRow) {
+      return;
+    }
+
+    const cell = row._cells[columnIndex];
+    const formula = cell && cell.formula();
+    if (!formula) {
+      activeSeries = null;
+      return;
+    }
+
+    if (activeSeries && activeSeries.endRow === rowIndex - 1) {
+      activeSeries.endRow = rowIndex;
+    }
+    else {
+      activeSeries = { startRow: rowIndex, endRow: rowIndex };
+    }
+
+    if (activeSeries.endRow - activeSeries.startRow >= 1) {
+      latestSeries = { ...activeSeries };
+    }
+  });
+
+  return latestSeries;
+}
+
+function formulaForSeriesEnd(sheet, columnIndex, series) {
+  const cell = sheet._rows[series.endRow]._cells[columnIndex];
+  if (cell.formula() !== 'SHARED') {
+    return { formula: cell.formula(), rowIndex: series.endRow };
+  }
+
+  const sharedFormulaId = cell._sharedFormulaId;
+  for (const row of sheet._rows) {
+    const sharedCell = row && row._cells[columnIndex];
+    if (sharedCell && sharedCell._sharedFormulaId === sharedFormulaId && sharedCell._formula) {
+      return { formula: sharedCell._formula, rowIndex: sharedCell.row().rowNumber() };
+    }
+  }
+
+  return null;
+}
+
+function extendFormulaSeries(sheet, startRow, lastDataRow, columns) {
+  if (lastDataRow < startRow) {
+    return;
+  }
+
+  for (const columnIndex of columns) {
+    const series = findDenseFormulaSeries(sheet, columnIndex, startRow);
+    if (!series || series.endRow >= lastDataRow) {
+      continue;
+    }
+
+    const source = formulaForSeriesEnd(sheet, columnIndex, series);
+    if (!source) {
+      continue;
+    }
+
+    for (let rowIndex = series.endRow + 1; rowIndex <= lastDataRow; rowIndex += 1) {
+      const cell = sheet.cell(rowIndex, columnIndex);
+      if (!cell.formula() && cell.value() === undefined) {
+        cell.formula(translateFormulaRows(source.formula, rowIndex - source.rowIndex));
+      }
+    }
+  }
+}
+
+function extendRequiredFormulaSeries(workbook, tableRows) {
+  const configurations = [
+    { sheet: 'Kabel', startRow: 2, rows: tableRows.Kabel ?? [], columns: [2, 3, 4, 5, 7, 8, 16] },
+    { sheet: 'Klant', startRow: 2, rows: tableRows.Klant ?? [], columns: [1, 2, 3, 4, 9, 10, 11, 13, 22] },
+    { sheet: 'LAS', startRow: 3, rows: tableRows.Las ?? [], columns: [15] }
+  ];
+
+  for (const configuration of configurations) {
+    extendFormulaSeries(
+      workbook.sheet(configuration.sheet),
+      configuration.startRow,
+      configuration.startRow + configuration.rows.length - 1,
+      configuration.columns
+    );
+  }
+}
+
 async function exportCrossCheckWorkbook({
   projectFolderPath,
   templatePath,
@@ -188,6 +375,7 @@ async function exportCrossCheckWorkbook({
   ]);
 
   const workbook = await XlsxPopulate.fromFileAsync(resolvedTemplatePath);
+  extendRequiredFormulaSeries(workbook, tableRows);
 
   writeMappedRows(workbook.sheet('FC'), 2, fcRows, Array.from({ length: 22 }, (_value, index) => index + 5), (row) => ({
     5: getRowValue(row, 'Projectnummer'),
@@ -339,6 +527,8 @@ async function exportCrossCheckWorkbook({
     13: row.ImportResult
   }));
 
+  forceFullCalculationOnOpen(workbook);
+  compactTrailingEmptyRows(workbook);
   await workbook.toFileAsync(outputPath);
 
   return {
