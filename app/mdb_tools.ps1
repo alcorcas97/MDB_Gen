@@ -2513,6 +2513,47 @@ function Get-DuctCableLookup {
     return $lookup
 }
 
+function Add-FcRefreshCustomerRowByCableId {
+    param(
+        [hashtable]$Lookup,
+        [object]$Row
+    )
+
+    $cableId = Normalize-Text $Row.Kabel
+    if ($null -eq $cableId) {
+        return
+    }
+
+    $key = $cableId.ToUpperInvariant()
+    if (-not $Lookup.ContainsKey($key)) {
+        $Lookup[$key] = [System.Collections.Generic.List[object]]::new()
+    }
+
+    $Lookup[$key].Add($Row)
+}
+
+function Test-FcRefreshKabeltypeSourceAllowed {
+    param(
+        [object[]]$ExistingCustomerRows,
+        [object[]]$TargetCustomerRows
+    )
+
+    foreach ($existingCustomerRow in @($ExistingCustomerRows)) {
+        if ((Normalize-UpperStatus $existingCustomerRow.Kastnr) -ne 'RESV') {
+            continue
+        }
+
+        foreach ($targetCustomerRow in @($TargetCustomerRows)) {
+            $targetFtuLocation = Normalize-UpperStatus $targetCustomerRow.Kastnr
+            if ($null -ne $targetFtuLocation -and $targetFtuLocation -ne 'RESV') {
+                return $true
+            }
+        }
+    }
+
+    return $false
+}
+
 function Merge-FcRefreshRow {
     param(
         [string]$TableName,
@@ -2635,11 +2676,14 @@ function Apply-FcRefresh {
     }
 
     $existingCustomersByKey = @{}
+    $existingCustomersByCableId = @{}
     foreach ($row in $existingCustomerRows) {
         $key = Get-ConnectionSyncKey -TableName 'Klant' -Row $row
         if ($null -ne $key) {
             $existingCustomersByKey[$key] = $row
         }
+
+        Add-FcRefreshCustomerRowByCableId -Lookup $existingCustomersByCableId -Row $row
     }
 
     $existingCablesByKey = @{}
@@ -2651,6 +2695,7 @@ function Apply-FcRefresh {
     }
 
     $targetCustomerRows = @()
+    $targetCustomersByCableId = @{}
     $targetCableRows = @()
     $updatedCustomers = 0
     $updatedCustomerFields = 0
@@ -2704,6 +2749,7 @@ function Apply-FcRefresh {
             }
         }
         $targetCustomerRows += $mergedRow
+        Add-FcRefreshCustomerRowByCableId -Lookup $targetCustomersByCableId -Row $mergedRow
 
         $diff = Compare-RowChangeCount -ExistingRow $existingRow -TargetRow $mergedRow
         if ($diff.Changed) {
@@ -2750,8 +2796,19 @@ function Apply-FcRefresh {
         $existingRow = if ($null -ne $key -and $existingCablesByKey.ContainsKey($key)) { $existingCablesByKey[$key] } else { $null }
         $mergedRow = Merge-FcRefreshRow -TableName 'Kabel' -SourceRow $sourceRow -ExistingRow $existingRow
         $label = Normalize-Text $mergedRow.Label
-        if ($null -ne $existingRow -and $null -ne $label -and $ductCableLookup.ContainsKey($label.ToUpperInvariant())) {
-            $mergedRow.Kabeltype = $existingRow.Kabeltype
+        if ($null -ne $existingRow) {
+            $isDuctCable = $null -ne $label -and $ductCableLookup.ContainsKey($label.ToUpperInvariant())
+            $shouldAcceptSourceKabeltype = $false
+            if (-not $isDuctCable -and $null -ne $label) {
+                $customerKey = $label.ToUpperInvariant()
+                $existingCustomerRowsForCable = if ($existingCustomersByCableId.ContainsKey($customerKey)) { @($existingCustomersByCableId[$customerKey]) } else { @() }
+                $targetCustomerRowsForCable = if ($targetCustomersByCableId.ContainsKey($customerKey)) { @($targetCustomersByCableId[$customerKey]) } else { @() }
+                $shouldAcceptSourceKabeltype = Test-FcRefreshKabeltypeSourceAllowed -ExistingCustomerRows $existingCustomerRowsForCable -TargetCustomerRows $targetCustomerRowsForCable
+            }
+
+            if ($isDuctCable -or -not $shouldAcceptSourceKabeltype) {
+                $mergedRow.Kabeltype = $existingRow.Kabeltype
+            }
         }
         $targetCableRows += $mergedRow
 
