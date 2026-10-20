@@ -67,6 +67,85 @@ input {
   font: inherit;
 }
 
+.modal-backdrop {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: rgba(4, 10, 13, 0.72);
+  backdrop-filter: blur(7px);
+}
+
+.selection-modal {
+  width: min(620px, 100%);
+  max-height: min(700px, calc(100vh - 44px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 16px;
+  padding: 22px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-xl);
+  background: var(--panel-solid);
+  box-shadow: var(--shadow-soft);
+}
+
+.selection-modal h2,
+.selection-modal p {
+  margin: 0;
+}
+
+.selection-modal p {
+  margin-top: 7px;
+  color: var(--muted);
+}
+
+.selection-list {
+  display: grid;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.selection-option {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--field);
+}
+
+.selection-option input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--primary);
+}
+
+.selection-option strong,
+.selection-option small {
+  display: block;
+}
+
+.selection-option small {
+  margin-top: 3px;
+  color: var(--muted);
+}
+
+.selection-option.unavailable {
+  opacity: 0.58;
+}
+
+.selection-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
 .app-shell {
   position: relative;
   z-index: 1;

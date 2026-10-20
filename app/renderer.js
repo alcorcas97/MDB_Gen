@@ -26,6 +26,8 @@ const elements = {
   extractCustomerCoordinatesButton: document.getElementById('extractCustomerCoordinatesButton'),
   moveResvCoordinatesToDpButton: document.getElementById('moveResvCoordinatesToDpButton'),
   reextractDpCoordinatesButton: document.getElementById('reextractDpCoordinatesButton'),
+  checkCrossingDpButton: document.getElementById('checkCrossingDpButton'),
+  clearCrossingDpButton: document.getElementById('clearCrossingDpButton'),
   removeExtraRolesButton: document.getElementById('removeExtraRolesButton'),
   drawAccessnetWithoutAddressButton: document.getElementById('drawAccessnetWithoutAddressButton'),
   applyDempingContingencyButton: document.getElementById('applyDempingContingencyButton'),
@@ -159,6 +161,8 @@ function setRunningState(running, cancelAvailable = false) {
     elements.extractCustomerCoordinatesButton,
     elements.moveResvCoordinatesToDpButton,
     elements.reextractDpCoordinatesButton,
+    elements.checkCrossingDpButton,
+    elements.clearCrossingDpButton,
     elements.createGestuurdeBoringenButton,
     elements.placePhktTextsButton,
     elements.placeRoutingPhktFromCheckButton,
@@ -715,6 +719,124 @@ async function drawCustomerCoordinates() {
     successMessage: (result) => `DWG actualizado con ${result.drawnCount} etiquetas de clientes.`,
     successLog: (result) => `Dibujo completado: ${result.drawnCount} textos escritos en el DWG.`,
     action: (payload) => fiberDesktopApi.drawCustomerCoordinates(payload)
+  });
+}
+
+function chooseCrossingDpGroups(groups) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-backdrop';
+    const modal = document.createElement('section');
+    modal.className = 'selection-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'crossingDpModalTitle');
+    modal.innerHTML = '<div><h2 id="crossingDpModalTitle">Check Crossing DP</h2><p>Selecciona los DPs para dibujar una linea recta hasta cada cliente asignado.</p></div>';
+
+    const list = document.createElement('div');
+    list.className = 'selection-list';
+    const selectable = [];
+    for (const group of groups) {
+      const valid = group.hasValidCoordinates && group.customerCount > 0;
+      const row = document.createElement('label');
+      row.className = `selection-option${valid ? '' : ' unavailable'}`;
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.value = group.label;
+      checkbox.disabled = !valid;
+      const detail = document.createElement('span');
+      const reason = !group.hasValidCoordinates
+        ? 'Sin coordenadas X/Y validas'
+        : group.customerCount === 0
+          ? 'Sin clientes asignados'
+          : `${group.customerCount} cliente(s)`;
+      detail.innerHTML = `<strong>${escapeHtml(group.label)}</strong><small>${escapeHtml(reason)}</small>`;
+      row.append(checkbox, detail);
+      list.append(row);
+      if (valid) selectable.push(checkbox);
+    }
+    modal.append(list);
+
+    const actions = document.createElement('div');
+    actions.className = 'selection-actions';
+    const allButton = document.createElement('button');
+    allButton.className = 'button tertiary';
+    allButton.type = 'button';
+    allButton.textContent = 'TODOS';
+    const cancelButton = document.createElement('button');
+    cancelButton.className = 'button tertiary';
+    cancelButton.type = 'button';
+    cancelButton.textContent = 'Cancelar';
+    const drawButton = document.createElement('button');
+    drawButton.className = 'button primary';
+    drawButton.type = 'button';
+    drawButton.textContent = 'Dibujar seleccionados';
+    actions.append(allButton, cancelButton, drawButton);
+    modal.append(actions);
+    overlay.append(modal);
+
+    const close = (value) => {
+      document.removeEventListener('keydown', onKeyDown);
+      overlay.remove();
+      resolve(value);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') close(null);
+    };
+    allButton.addEventListener('click', () => selectable.forEach((checkbox) => { checkbox.checked = true; }));
+    cancelButton.addEventListener('click', () => close(null));
+    drawButton.addEventListener('click', () => close(selectable.filter((checkbox) => checkbox.checked).map((checkbox) => checkbox.value)));
+    document.addEventListener('keydown', onKeyDown);
+    document.body.append(overlay);
+  });
+}
+
+async function checkCrossingDp() {
+  if (!fiberDesktopApi) return;
+  const missing = validateToolInputs();
+  if (missing.length > 0) {
+    const message = `Faltan campos obligatorios: ${missing.join(', ')}.`;
+    setStatus(message, 'warning');
+    appendLog(message, 'warning');
+    return;
+  }
+
+  setRunningState(true, false);
+  try {
+    setStatus('Leyendo DPs y clientes desde la MDB de trabajo...', 'neutral');
+    const prepared = await fiberDesktopApi.prepareCrossingDp({ projectFolderPath: elements.projectFolderPath.value.trim() });
+    setRunningState(false);
+    const selectedDpLabels = await chooseCrossingDpGroups(prepared.groups ?? []);
+    if (!selectedDpLabels || selectedDpLabels.length === 0) {
+      setStatus('No se ha seleccionado ningun DP; no se ha modificado el DWG.', 'warning');
+      return;
+    }
+
+    setRunningState(true, false);
+    setStatus('Dibujando Crossing DP en el DWG...', 'neutral');
+    const result = await fiberDesktopApi.drawCrossingDp({
+      projectFolderPath: elements.projectFolderPath.value.trim(),
+      selectedDpLabels
+    });
+    setStatus(`Crossing DP completado: ${result.dpCount} DPs y ${result.drawnCount} lineas.`, 'success');
+    appendLog(`Crossing DP: ${result.dpCount} DPs, ${result.drawnCount} lineas en ${result.dwgPath}.`, 'success');
+    await loadOperationHistory({ silent: true });
+  }
+  catch (error) {
+    setStatus(error.message, 'error');
+    appendLog(error.message, 'error');
+  }
+  finally {
+    setRunningState(false);
+  }
+}
+
+async function clearCrossingDp() {
+  await runProjectTool({
+    startMessage: 'Limpiando exclusivamente las lineas Crossing DP...',
+    successMessage: (result) => `Crossing DP limpiado: ${result.removedCount} entidades eliminadas.`,
+    successLog: (result) => `Crossing DP limpiado: ${result.removedCount} entidades eliminadas de ${result.dwgPath}.`,
+    action: (payload) => fiberDesktopApi.clearCrossingDp(payload)
   });
 }
 
@@ -1482,6 +1604,14 @@ elements.moveResvCoordinatesToDpButton.addEventListener('click', () => {
 
 elements.reextractDpCoordinatesButton.addEventListener('click', () => {
   void reextractDpCoordinates();
+});
+
+elements.checkCrossingDpButton.addEventListener('click', () => {
+  void checkCrossingDp();
+});
+
+elements.clearCrossingDpButton.addEventListener('click', () => {
+  void clearCrossingDp();
 });
 
 elements.createGestuurdeBoringenButton.addEventListener('click', () => {

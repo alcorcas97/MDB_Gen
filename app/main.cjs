@@ -3875,6 +3875,72 @@ ipcMain.handle('dwg:draw-customers', async (_event, payload) => {
   };
 });
 
+async function loadCrossingDpGroups(workingMdbPath) {
+  const [dpTargets, customerItems] = await Promise.all([
+    runMdbToolsJson(['-Mode', 'ExportDpCoordinateTargets', '-MdbPath', workingMdbPath]),
+    runMdbToolsJson(['-Mode', 'ExportCustomerDrawData', '-MdbPath', workingMdbPath])
+  ]);
+  const { _internal } = getDwgToolsModule();
+  return _internal.buildCrossingDpGroups(
+    Array.isArray(dpTargets) ? dpTargets : (dpTargets ? [dpTargets] : []),
+    Array.isArray(customerItems) ? customerItems : (customerItems ? [customerItems] : [])
+  );
+}
+
+ipcMain.handle('dwg:prepare-crossing-dp', async (_event, payload) => {
+  if (activeRun) throw new Error('Ya hay una operacion en curso.');
+  validateProjectAndMdbInput(payload);
+  const workingMdbPath = await resolveProjectWorkingMdbPath(payload.projectFolderPath);
+  const groups = await loadCrossingDpGroups(workingMdbPath);
+  sendGenerationEvent({ type: 'log', level: 'info', message: `Crossing DP: ${groups.length} DPs leidos desde ${workingMdbPath}.\n` });
+  return { mdbPath: workingMdbPath, groups };
+});
+
+ipcMain.handle('dwg:draw-crossing-dp', async (_event, payload) => {
+  if (activeRun) throw new Error('Ya hay una operacion en curso.');
+  validateProjectAndMdbInput(payload);
+  const selectedDpLabels = new Set((Array.isArray(payload?.selectedDpLabels) ? payload.selectedDpLabels : [])
+    .map((label) => String(label ?? '').trim().toUpperCase())
+    .filter(Boolean));
+  if (selectedDpLabels.size === 0) {
+    throw new Error('Selecciona al menos un DP antes de dibujar Crossing DP.');
+  }
+
+  const workingMdbPath = await resolveProjectWorkingMdbPath(payload.projectFolderPath);
+  const groups = await loadCrossingDpGroups(workingMdbPath);
+  const selectedGroups = groups.filter((group) => selectedDpLabels.has(group.label.toUpperCase()) && group.hasValidCoordinates && group.customerCount > 0);
+  if (selectedGroups.length === 0) {
+    throw new Error('Los DPs seleccionados ya no tienen coordenadas validas o clientes asignados en la MDB.');
+  }
+
+  const dwgBackup = await backupPrimaryDwg(payload.projectFolderPath, 'Check Crossing DP');
+  const { drawCrossingDpToDwg } = getDwgToolsModule();
+  const result = await drawCrossingDpToDwg(payload.projectFolderPath, selectedGroups, {
+    onStage: (stage) => sendGenerationEvent({ type: 'status', message: stage === 'delete' ? 'Eliminando lineas Crossing DP anteriores...' : 'Dibujando lineas Crossing DP...' }),
+    onProgress: ({ drawnCount, totalCount }) => sendGenerationEvent({ type: 'progress', current: drawnCount, total: totalCount, message: `Dibujando Crossing DP: ${drawnCount}/${totalCount}.` })
+  });
+  if (dwgBackup) {
+    await updateOperationBackup({ projectPath: payload.projectFolderPath, entryId: dwgBackup.id, status: 'completed', summary: summarizeOperationResult(result) });
+  }
+  sendGenerationEvent({ type: 'log', level: 'info', message: `Crossing DP dibujado: ${result.dpCount} DPs y ${result.drawnCount} lineas en ${result.dwgPath}.\n` });
+  return { mdbPath: workingMdbPath, ...result };
+});
+
+ipcMain.handle('dwg:clear-crossing-dp', async (_event, payload) => {
+  if (activeRun) throw new Error('Ya hay una operacion en curso.');
+  validateProjectAndMdbInput(payload);
+  const dwgBackup = await backupPrimaryDwg(payload.projectFolderPath, 'Limpiar Crossing DP');
+  const { clearCrossingDpInDwg } = getDwgToolsModule();
+  const result = await clearCrossingDpInDwg(payload.projectFolderPath, {
+    onStage: () => sendGenerationEvent({ type: 'status', message: 'Eliminando exclusivamente la capa Crossing DP...' })
+  });
+  if (dwgBackup) {
+    await updateOperationBackup({ projectPath: payload.projectFolderPath, entryId: dwgBackup.id, status: 'completed', summary: summarizeOperationResult(result) });
+  }
+  sendGenerationEvent({ type: 'log', level: 'info', message: `Crossing DP limpiado: ${result.removedCount} entidades eliminadas en ${result.dwgPath}.\n` });
+  return result;
+});
+
 ipcMain.handle('dwg:place-phkt-texts', async (_event, payload) => {
   if (activeRun) {
     throw new Error('Ya hay una operacion en curso.');

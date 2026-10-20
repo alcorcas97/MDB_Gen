@@ -35,6 +35,13 @@ const ACCESSNET_WITHOUT_ADDRESS_CHECK_CODE = 'M-30001';
 const ACCESSNET_MARK_LAYER_NAME = 'FMDB_ACCESSNET_NO_ADDRESS';
 const ACCESSNET_MARK_COLOR = 1;
 const ACCESSNET_MARK_RADIUS = 1.5;
+const CROSSING_DP_LAYER_NAME = 'FMDB_CHECK_CROSSING_DP';
+const CROSSING_DP_PREFERRED_COLORS = [1, 2, 3, 4, 5, 6, 30, 140];
+const CROSSING_DP_COLORS = [
+  ...CROSSING_DP_PREFERRED_COLORS,
+  ...Array.from({ length: 255 }, (_, index) => index + 1)
+    .filter((color) => color !== 7 && !CROSSING_DP_PREFERRED_COLORS.includes(color))
+];
 const ROUTING_PROBLEM_SECTION_PATTERN = /routing\s+problem/i;
 const ROUTING_NO_NETWORK_MESSAGE_PATTERN = /no\s+network\s+connection\s+found\s+within\s+0\s*[,\.]\s*1\s*m\s+from\s+the\s+point/i;
 
@@ -453,6 +460,130 @@ function toLispData(items) {
   });
 
   return `(\n${lines.join('\n')}\n)\n`;
+}
+
+function hasValidXy(item) {
+  const x = Number(item?.x);
+  const y = Number(item?.y);
+  return Number.isFinite(x) && Number.isFinite(y) && (x !== 0 || y !== 0);
+}
+
+function buildCrossingDpGroups(dpTargets, customerItems) {
+  const customersByDp = new Map();
+  for (const customer of Array.isArray(customerItems) ? customerItems : []) {
+    const label = normalizeText(customer?.locationLabel);
+    if (!label || !hasValidXy(customer)) continue;
+    const key = label.toUpperCase();
+    const customers = customersByDp.get(key) ?? [];
+    customers.push({ x: Number(customer.x), y: Number(customer.y), klantId: customer.klantId ?? null });
+    customersByDp.set(key, customers);
+  }
+
+  return (Array.isArray(dpTargets) ? dpTargets : [])
+    .map((target) => {
+      const label = normalizeText(target?.label);
+      const customers = label ? (customersByDp.get(label.toUpperCase()) ?? []) : [];
+      return {
+        label,
+        x: Number(target?.x),
+        y: Number(target?.y),
+        hasValidCoordinates: hasValidXy(target),
+        customerCount: customers.length,
+        customers
+      };
+    })
+    .filter((group) => group.label)
+    .sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: 'base' }))
+    .map((group, index) => ({ ...group, color: CROSSING_DP_COLORS[index % CROSSING_DP_COLORS.length] }));
+}
+
+function toCrossingDpLispData(groups) {
+  const lines = groups.map((group) => {
+    const customers = group.customers.map((customer) => `(${customer.x} ${customer.y})`).join(' ');
+    return `  ("${escapeLispString(group.label)}" ${group.x} ${group.y} ${group.color} (${customers}))`;
+  });
+  return `(\n${lines.join('\n')}\n)\n`;
+}
+
+function buildCrossingDpLisp(groups, { progressFilePath, draw = true }) {
+  const drawBlock = draw
+    ? `(if (not (tblsearch "LAYER" fmdb-crossing-layer))
+    (command "_.-LAYER" "_Make" fmdb-crossing-layer "")
+  )
+  (setq total 0)
+  (foreach group fmdb-crossing-items (setq total (+ total (length (nth 4 group)))))
+  (setq drawn 0)
+  (fmdb-report-stage "draw")
+  (if (> total 0) (fmdb-report-progress 0 total))
+  (foreach group fmdb-crossing-items
+    (foreach customer (nth 4 group)
+      (entmakex (list '(0 . "LINE") (cons 8 fmdb-crossing-layer) (cons 10 (list (nth 1 group) (nth 2 group) 0.0)) (cons 11 (list (car customer) (cadr customer) 0.0)) (cons 62 (nth 3 group))))
+      (setq drawn (1+ drawn))
+      (fmdb-report-progress drawn total)
+    )
+  )
+  (fmdb-report-result "DRAWN" (itoa drawn))`
+    : '(fmdb-crossing-delete-empty-layer)';
+
+  return `(setq fmdb-crossing-layer "${CROSSING_DP_LAYER_NAME}")
+(setq fmdb-crossing-items '${toCrossingDpLispData(Array.isArray(groups) ? groups : [])})
+${buildProgressHelpersLisp(progressFilePath)}
+(vl-load-com)
+
+(defun fmdb-crossing-delete-layer-entities (/ selection index entity deletedCount)
+  (setq deletedCount 0)
+  (if (setq selection (ssget "_X" (list (cons 8 fmdb-crossing-layer))))
+    (progn
+      (setq index 0)
+      (repeat (sslength selection)
+        (setq entity (ssname selection index))
+        (if (entdel entity) (setq deletedCount (1+ deletedCount)))
+        (setq index (1+ index))
+      )
+    )
+  )
+  deletedCount
+)
+
+(defun fmdb-crossing-delete-empty-layer (/ layerObject)
+  (if (and (tblsearch "LAYER" fmdb-crossing-layer)
+           (not (ssget "_X" (list (cons 8 fmdb-crossing-layer)))))
+    (progn
+      (setq layerObject (vlax-ename->vla-object (tblobjname "LAYER" fmdb-crossing-layer)))
+      (if layerObject (vla-delete layerObject))
+    )
+  )
+)
+
+(defun fmdb-crossing-restore-settings (oldFiledia oldCmdecho oldLayer)
+  (if (and oldLayer (tblsearch "LAYER" oldLayer)) (setvar "CLAYER" oldLayer))
+  (if oldCmdecho (setvar "CMDECHO" oldCmdecho))
+  (if oldFiledia (setvar "FILEDIA" oldFiledia))
+)
+
+(defun c:FIBER_CHECK_CROSSING_DP (/ oldFiledia oldCmdecho oldLayer oldError deletedCount total drawn group customer)
+  (setq oldFiledia (getvar "FILEDIA"))
+  (setq oldCmdecho (getvar "CMDECHO"))
+  (setq oldLayer (getvar "CLAYER"))
+  (setq oldError *error*)
+  (defun *error* (message)
+    (fmdb-crossing-restore-settings oldFiledia oldCmdecho oldLayer)
+    (setq *error* oldError)
+    (princ)
+  )
+  (setvar "FILEDIA" 0)
+  (setvar "CMDECHO" 0)
+  (if (tblsearch "LAYER" "0") (setvar "CLAYER" "0"))
+  (fmdb-report-stage "delete")
+  (setq deletedCount (fmdb-crossing-delete-layer-entities))
+  (fmdb-report-result "DELETED" (itoa deletedCount))
+  ${drawBlock}
+  (fmdb-crossing-restore-settings oldFiledia oldCmdecho oldLayer)
+  (setq *error* oldError)
+  (fmdb-report-done "CROSSING_DP")
+  (princ)
+)
+`;
 }
 
 function buildDrawLisp(drawItems, { progressFilePath, progressStep }) {
@@ -2655,6 +2786,106 @@ async function clearCustomerCoordinatesInDwg(projectFolderPath, options = {}) {
   }
 }
 
+async function runCrossingDpInDwg(projectFolderPath, groups, options = {}) {
+  const dwgPath = await getFirstDwgPath(projectFolderPath);
+  if (!dwgPath) {
+    throw new Error('No se ha encontrado un DWG en la carpeta del proyecto.');
+  }
+
+  const draw = options.draw !== false;
+  const validGroups = (Array.isArray(groups) ? groups : []).filter((group) => (
+    group?.label && hasValidXy(group) && Array.isArray(group.customers) && group.customers.length > 0
+  ));
+  if (draw && validGroups.length === 0) {
+    throw new Error('No hay DPs seleccionados con coordenadas validas y clientes para dibujar.');
+  }
+
+  const lineCount = validGroups.reduce((count, group) => count + group.customers.length, 0);
+  const projectToken = path.basename(path.resolve(projectFolderPath)).replace(/[^A-Za-z0-9._-]+/g, '_');
+  const scriptToken = `${projectToken}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const timeoutMs = Math.max(90000, Math.max(1, lineCount) * 150);
+  const lispFilePath = path.join(os.tmpdir(), `fiber-crossing-dp-${scriptToken}.lsp`);
+  const progressFilePath = path.join(os.tmpdir(), `fiber-crossing-dp-${scriptToken}.progress`);
+  const scriptFilePath = path.join(os.tmpdir(), `fiber-crossing-dp-${scriptToken}.scr`);
+  let accoreConsolePath = null;
+  let removedCount = 0;
+  let drawnCount = 0;
+
+  try {
+    await removeFileIfExists(progressFilePath);
+    await fsp.writeFile(lispFilePath, buildCrossingDpLisp(validGroups, { progressFilePath, draw }), 'utf8');
+    let timedOut = false;
+    let usedOpenDocument = false;
+    const progressMonitor = startProgressMonitor(progressFilePath, {
+      onStage: options.onStage,
+      onProgress: options.onProgress,
+      onResult: (result) => {
+        const value = Number(result.value);
+        if (!Number.isFinite(value)) return;
+        if (result.name === 'DELETED') removedCount = value;
+        if (result.name === 'DRAWN') drawnCount = value;
+      }
+    });
+
+    try {
+      const openDocumentResult = await tryRunCommandOnOpenDocument({
+        dwgPath,
+        lispFilePath,
+        commandName: 'FIBER_CHECK_CROSSING_DP',
+        progressFilePath,
+        timeoutMs,
+        saveDocument: true
+      });
+      if (openDocumentResult?.handled) {
+        usedOpenDocument = true;
+      }
+      else {
+        accoreConsolePath = await findAccoreConsolePath();
+        if (!accoreConsolePath) {
+          throw new Error('No se ha encontrado accoreconsole.exe. Hace falta una instalacion local de AutoCAD.');
+        }
+        await runAccoreConsoleCommand({
+          accoreConsolePath,
+          dwgPath,
+          lispFilePath,
+          scriptFilePath,
+          commandName: 'FIBER_CHECK_CROSSING_DP',
+          timeoutMs,
+          saveDocument: true
+        });
+      }
+    }
+    catch (error) {
+      if (/Tiempo de espera agotado/i.test(String(error?.message ?? ''))) timedOut = true;
+      else throw error;
+    }
+    finally {
+      await progressMonitor.stop();
+    }
+
+    if (draw && drawnCount !== lineCount) {
+      throw new Error(`AutoCAD ha confirmado ${drawnCount} de ${lineCount} lineas Crossing DP.`);
+    }
+
+    return { dwgPath, accoreConsolePath, removedCount, drawnCount, dpCount: validGroups.length, manualScriptPath: scriptFilePath, timeoutMs, timedOut, usedOpenDocument };
+  }
+  catch (error) {
+    const rootMessage = String(error?.message ?? error).split('\n')[0];
+    throw new Error(`No se ha podido completar Crossing DP. Se ha dejado el script listo en ${scriptFilePath}. ${rootMessage}`);
+  }
+  finally {
+    await removeFileIfExists(progressFilePath);
+  }
+}
+
+async function drawCrossingDpToDwg(projectFolderPath, groups, options = {}) {
+  return runCrossingDpInDwg(projectFolderPath, groups, { ...options, draw: true });
+}
+
+async function clearCrossingDpInDwg(projectFolderPath, options = {}) {
+  return runCrossingDpInDwg(projectFolderPath, [], { ...options, draw: false });
+}
+
 async function removeExtraRolesFromCheck(projectFolderPath, options = {}) {
   if (typeof options.onStage === 'function') {
     options.onStage('locate');
@@ -2924,10 +3155,15 @@ async function drawAccessnetWithoutAddressFromCheck(projectFolderPath, options =
 
 module.exports = {
   CUSTOMER_LAYER_COLORS,
+  CROSSING_DP_LAYER_NAME,
   _internal: {
+    buildCrossingDpGroups,
+    buildCrossingDpLisp,
     parseRoutingProblemLabelsFromCheckHtml
   },
+  clearCrossingDpInDwg,
   drawAccessnetWithoutAddressFromCheck,
+  drawCrossingDpToDwg,
   clearCustomerCoordinatesInDwg,
   createGestuurdeBoringen,
   drawCustomerCoordinatesToDwg,
