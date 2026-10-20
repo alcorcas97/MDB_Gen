@@ -3,14 +3,14 @@ const test = require('node:test');
 
 const { CROSSING_DP_LAYER_NAME, _internal } = require('../app/lib/dwg-tools.cjs');
 
-test('Crossing DP groups only valid customer coordinates by Kabel.Locatienaam_B', () => {
+test('Crossing DP prefers Kabel.Locatienaam_A over the postal location label', () => {
   const groups = _internal.buildCrossingDpGroups([
     { label: 'AREA-ODP01', x: 100, y: 200 },
     { label: 'AREA-ODP02', x: 0, y: 0 },
     { label: 'AREA-ODP03', x: 300, y: 400 }
   ], [
-    { locationLabel: 'area-odp01', x: 110, y: 210, klantId: 1 },
-    { locationLabel: 'AREA-ODP01', x: 0, y: 0, klantId: 2 },
+    { dpLabel: 'area-odp01', locationLabel: 'POSTCODE-1234AB-10', x: 110, y: 210, klantId: 1 },
+    { dpLabel: 'AREA-ODP03', locationLabel: 'AREA-ODP01', x: 115, y: 215, klantId: 2 },
     { locationLabel: 'AREA-ODP02', x: 120, y: 220, klantId: 3 },
     { locationLabel: 'UNKNOWN-ODP', x: 130, y: 230, klantId: 4 }
   ]);
@@ -18,9 +18,10 @@ test('Crossing DP groups only valid customer coordinates by Kabel.Locatienaam_B'
   assert.deepEqual(groups.map((group) => [group.label, group.hasValidCoordinates, group.customerCount]), [
     ['AREA-ODP01', true, 1],
     ['AREA-ODP02', false, 1],
-    ['AREA-ODP03', true, 0]
+    ['AREA-ODP03', true, 1]
   ]);
   assert.equal(groups[0].customers[0].klantId, 1);
+  assert.equal(groups[2].customers[0].klantId, 2);
 });
 
 test('Crossing DP LISP draws colored LINE entities on one temporary layer', () => {

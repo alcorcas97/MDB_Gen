@@ -471,7 +471,7 @@ function hasValidXy(item) {
 function buildCrossingDpGroups(dpTargets, customerItems) {
   const customersByDp = new Map();
   for (const customer of Array.isArray(customerItems) ? customerItems : []) {
-    const label = normalizeText(customer?.locationLabel);
+    const label = normalizeText(customer?.dpLabel) ?? normalizeText(customer?.locationLabel);
     if (!label || !hasValidXy(customer)) continue;
     const key = label.toUpperCase();
     const customers = customersByDp.get(key) ?? [];

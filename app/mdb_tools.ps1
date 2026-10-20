@@ -388,10 +388,37 @@ function Get-KabelLocationMap {
     return $lookup
 }
 
+function Get-KabelDpMap {
+    param([__ComObject]$Database)
+
+    $lookup = @{}
+    $recordset = $Database.OpenRecordset('SELECT [Label], [Locatienaam_A] FROM [Kabel]')
+
+    try {
+        while (-not $recordset.EOF) {
+            $kabelLabel = Normalize-Text $recordset.Fields('Label').Value
+            $dpLabel = Normalize-Text $recordset.Fields('Locatienaam_A').Value
+
+            if ($null -ne $kabelLabel) {
+                $lookup[$kabelLabel] = $dpLabel
+            }
+
+            $recordset.MoveNext()
+        }
+    }
+    finally {
+        $recordset.Close()
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($recordset)
+    }
+
+    return $lookup
+}
+
 function Export-CustomerDrawData {
     param([__ComObject]$Database)
 
     $kabelLookup = Get-KabelLocationMap -Database $Database
+    $kabelDpLookup = Get-KabelDpMap -Database $Database
     $rows = @()
     $recordset = $Database.OpenRecordset('SELECT [ID], [Kastnr], [Kabel], [X], [Y] FROM [Klant]')
 
@@ -399,11 +426,13 @@ function Export-CustomerDrawData {
         while (-not $recordset.EOF) {
             $kabelLabel = Normalize-Text $recordset.Fields('Kabel').Value
             $locationLabel = if ($null -ne $kabelLabel -and $kabelLookup.ContainsKey($kabelLabel)) { $kabelLookup[$kabelLabel] } else { $null }
+            $dpLabel = if ($null -ne $kabelLabel -and $kabelDpLookup.ContainsKey($kabelLabel)) { $kabelDpLookup[$kabelLabel] } else { $null }
 
             $rows += [pscustomobject]@{
                 klantId       = [int]$recordset.Fields('ID').Value
                 kabelLabel    = $kabelLabel
                 locationLabel = $locationLabel
+                dpLabel       = $dpLabel
                 kastnr        = Normalize-Text $recordset.Fields('Kastnr').Value
                 x             = Convert-ToNullableDouble $recordset.Fields('X').Value
                 y             = Convert-ToNullableDouble $recordset.Fields('Y').Value
