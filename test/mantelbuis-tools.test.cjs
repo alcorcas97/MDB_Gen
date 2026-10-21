@@ -5,9 +5,9 @@ const test = require('node:test');
 
 const { _internal } = require('../app/lib/dwg-tools.cjs');
 
-test('Mantelbuis LISP scans automatically, restores system variables and exports typed endpoints', () => {
+test('Mantelbuis LISP exports endpoints and restores material polylines as DRILLING MLINE', () => {
   const lisp = _internal.buildCreateMantelbuisLisp({ outputFilePath: 'C:\\temp\\mantelbuis.tsv', progressFilePath: 'C:\\temp\\mantelbuis.progress' });
-  for (const token of ['LWPOLYLINE', 'MLINE,LWPOLYLINE,POLYLINE', 'TEXT,MTEXT,MULTILEADER', '(ssget "_X"', 'fmdb-mantelbuis-near-material', 'OSMODE', 'CLAYER', 'FILEDIA', 'CMDECHO', '(fmdb-report-done "MANTELBUIS")']) {
+  for (const token of ['LWPOLYLINE', 'MLINE,LWPOLYLINE,POLYLINE', 'TEXT,MTEXT,MULTILEADER', '(ssget "_X"', 'fmdb-mantelbuis-near-material', 'fmdb-mantelbuis-restore-drilling', '(list "CMLSTYLE" "DRILLING")', '(command "_.MLINE")', '(entdel entity)', '(setvar "OSMODE" 0)', 'CLAYER', 'FILEDIA', 'CMDECHO', 'CMLJUST', 'CMLSCALE', '(fmdb-report-result "RESTORED"', '(fmdb-report-done "MANTELBUIS")']) {
     assert.match(lisp, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.doesNotMatch(lisp, /\bentsel\b/i);

@@ -543,23 +543,32 @@ ${buildProgressHelpersLisp(progressFilePath)}
   )
   points
 )
-(defun fmdb-mantelbuis-convert (entity material points / firstPoint lastPoint newEntity)
-  (if (and points (> (length points) 1)) (progn
-    (if (not (tblsearch "LAYER" material))
-      (entmake (list '(0 . "LAYER") '(100 . "AcDbSymbolTableRecord") '(100 . "AcDbLayerTableRecord") (cons 2 material) '(70 . 0) '(62 . 3) '(6 . "Continuous")))
+(defun fmdb-mantelbuis-restore-drilling (entity points / sourceLayer styleResult beforeEntity newEntity)
+  (setq sourceLayer (cdr (assoc 8 (entget entity))))
+  (setq styleResult (vl-catch-all-apply 'setvar (list "CMLSTYLE" "DRILLING")))
+  (if (or (vl-catch-all-error-p styleResult) (not points) (< (length points) 2))
+    nil
+    (progn
+      (setvar "OSMODE" 0) (setvar "CMLJUST" 1) (setvar "CMLSCALE" 1)
+      (if (and sourceLayer (tblsearch "LAYER" sourceLayer)) (setvar "CLAYER" sourceLayer))
+      (setq beforeEntity (entlast))
+      (command "_.MLINE")
+      (foreach point points (command point))
+      (command "")
+      (setq newEntity (entlast))
+      (if (and newEntity (not (equal newEntity beforeEntity)) (= (cdr (assoc 0 (entget newEntity))) "MLINE"))
+        (progn (entdel entity) T)
+        nil
+      )
     )
-    (setq newEntity (entmakex (append (list '(0 . "LWPOLYLINE") '(100 . "AcDbEntity") (cons 8 material) '(100 . "AcDbPolyline") (cons 90 (length points)) (cons 70 0)) (mapcar '(lambda (point) (cons 10 (list (car point) (cadr point)))) points))))
-    (if newEntity (progn
-      (entdel entity) (setq firstPoint (car points) lastPoint (car (reverse points))) (fmdb-mantelbuis-write "DUCT" material firstPoint lastPoint) T
-    ) nil)
-  ) nil)
+  )
 )
-(defun c:${CREATE_MANTELBUIS_COMMAND_NAME} (/ oldError oldOsMode oldClayer oldFileDia oldCmdEcho outputHandle selection index entity entityData object objectName text point texts points material converted scanned missing ambiguous)
-  (setq oldError *error* oldOsMode (getvar "OSMODE") oldClayer (getvar "CLAYER") oldFileDia (getvar "FILEDIA") oldCmdEcho (getvar "CMDECHO") converted 0 scanned 0 missing 0 ambiguous 0 texts nil)
+(defun c:${CREATE_MANTELBUIS_COMMAND_NAME} (/ oldError oldOsMode oldClayer oldFileDia oldCmdEcho oldCmlStyle oldCmlJust oldCmlScale outputHandle selection index entity entityData object objectName text point texts points material converted restored scanned missing ambiguous restoreItems restoreItem)
+  (setq oldError *error* oldOsMode (getvar "OSMODE") oldClayer (getvar "CLAYER") oldFileDia (getvar "FILEDIA") oldCmdEcho (getvar "CMDECHO") oldCmlStyle (getvar "CMLSTYLE") oldCmlJust (getvar "CMLJUST") oldCmlScale (getvar "CMLSCALE") converted 0 restored 0 scanned 0 missing 0 ambiguous 0 texts nil restoreItems nil)
   (defun *error* (message)
-    (setvar "OSMODE" oldOsMode) (setvar "CLAYER" oldClayer) (setvar "FILEDIA" oldFileDia) (setvar "CMDECHO" oldCmdEcho)
+    (setvar "OSMODE" oldOsMode) (setvar "CLAYER" oldClayer) (setvar "FILEDIA" oldFileDia) (setvar "CMDECHO" oldCmdEcho) (setvar "CMLSTYLE" oldCmlStyle) (setvar "CMLJUST" oldCmlJust) (setvar "CMLSCALE" oldCmlScale)
     (if (and message (not (wcmatch (strcase message) "*CANCEL*,*EXIT*,*BREAK*"))) (fmdb-report-result "ERROR" message))
-    (fmdb-report-result "CONVERTED" (itoa converted)) (fmdb-report-result "REVIEW" (itoa (+ missing ambiguous))) (fmdb-report-done "MANTELBUIS") (setq *error* oldError) (princ)
+    (fmdb-report-result "CONVERTED" (itoa converted)) (fmdb-report-result "RESTORED" (itoa restored)) (fmdb-report-result "REVIEW" (itoa (+ missing ambiguous))) (fmdb-report-done "MANTELBUIS") (setq *error* oldError) (princ)
   )
   (setq outputHandle (open fmdb-output-file "w"))
   (if outputHandle (close outputHandle) (fmdb-report-result "ERROR" "No se puede abrir el fichero de salida."))
@@ -592,20 +601,32 @@ ${buildProgressHelpersLisp(progressFilePath)}
             (setq scanned (1+ scanned))
             (if (not material) (setq material (fmdb-mantelbuis-near-material points texts)))
             (if material
-              (if (fmdb-mantelbuis-convert entity material points) (setq converted (1+ converted)) (setq missing (1+ missing)))
+              (progn
+                (fmdb-mantelbuis-write "DUCT" material (car points) (car (reverse points)))
+                (setq converted (1+ converted))
+              )
               (setq missing (1+ missing))
             )
           ))
-          (if (and (not (equal objectName "MLINE")) material)
+          (if (and (not (equal objectName "MLINE")) material) (progn
             (fmdb-mantelbuis-write "DUCT" material (car points) (car (reverse points)))
+            (setq restoreItems (cons (list entity points) restoreItems))
+          )
           )
         ))
       ))
       (setq index (1+ index))
     ))
+    (fmdb-report-stage "restore")
+    (foreach restoreItem restoreItems
+      (if (fmdb-mantelbuis-restore-drilling (car restoreItem) (cadr restoreItem))
+        (setq restored (1+ restored))
+        (setq missing (1+ missing))
+      )
+    )
   ))
-  (setvar "OSMODE" oldOsMode) (setvar "CLAYER" oldClayer) (setvar "FILEDIA" oldFileDia) (setvar "CMDECHO" oldCmdEcho)
-  (fmdb-report-result "SCANNED" (itoa scanned)) (fmdb-report-result "CONVERTED" (itoa converted)) (fmdb-report-result "REVIEW" (itoa (+ missing ambiguous))) (fmdb-report-done "MANTELBUIS") (setq *error* oldError) (princ)
+  (setvar "OSMODE" oldOsMode) (setvar "CLAYER" oldClayer) (setvar "FILEDIA" oldFileDia) (setvar "CMDECHO" oldCmdEcho) (setvar "CMLSTYLE" oldCmlStyle) (setvar "CMLJUST" oldCmlJust) (setvar "CMLSCALE" oldCmlScale)
+  (fmdb-report-result "SCANNED" (itoa scanned)) (fmdb-report-result "CONVERTED" (itoa converted)) (fmdb-report-result "RESTORED" (itoa restored)) (fmdb-report-result "REVIEW" (itoa (+ missing ambiguous))) (fmdb-report-done "MANTELBUIS") (setq *error* oldError) (princ)
 )
 `;
 }
@@ -755,7 +776,7 @@ async function createMantelbuis(projectFolderPath, options = {}) {
       ...(unresolvedGeometryCount > 0 ? [`${unresolvedGeometryCount} MLINE sin material unico a menos de 5 m`] : []),
       ...boring.reviewItems
     ];
-    return { dwgPath, convertedCount: Number(progress.match(/FMDB_RESULT:CONVERTED=(\d+)/i)?.[1] ?? 0), reviewCount: unresolvedGeometryCount + boring.reviewItems.length, reviewItems, rows, cancelled: rows.length === 0 };
+    return { dwgPath, convertedCount: Number(progress.match(/FMDB_RESULT:CONVERTED=(\d+)/i)?.[1] ?? 0), restoredCount: Number(progress.match(/FMDB_RESULT:RESTORED=(\d+)/i)?.[1] ?? 0), reviewCount: unresolvedGeometryCount + boring.reviewItems.length, reviewItems, rows, cancelled: rows.length === 0 };
   } finally { await Promise.all([lispFilePath, outputFilePath, progressFilePath, scriptFilePath].map((target) => removeFileIfExists(target))); }
 }
 
