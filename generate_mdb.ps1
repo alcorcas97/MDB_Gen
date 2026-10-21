@@ -165,11 +165,37 @@ function Resolve-CustomerMeasurement {
         return $null
     }
 
-    if ($null -ne $Powermeter) {
-        return $Powermeter
+    $culture = [System.Globalization.CultureInfo]::InvariantCulture
+    $styles = [System.Globalization.NumberStyles]::Number
+    $selectedText = $null
+    $selectedValue = [decimal]0
+
+    foreach ($candidate in @($Powermeter, $IpFiberValue)) {
+        $text = Normalize-Measurement $candidate
+        if ($null -eq $text) {
+            continue
+        }
+
+        $numericText = $text.Replace(',', '.')
+        $numericValue = [decimal]0
+        if (-not [decimal]::TryParse($numericText, $styles, $culture, [ref]$numericValue) -or $numericValue -eq 0) {
+            continue
+        }
+
+        $selectedText = $text
+        $selectedValue = $numericValue
+        break
     }
 
-    return $IpFiberValue
+    if ($null -eq $selectedText) {
+        return '2,2'
+    }
+
+    if ($selectedValue -gt 3) {
+        return '-' + $selectedText.TrimStart('+')
+    }
+
+    return $selectedText
 }
 
 function Parse-DateValue {

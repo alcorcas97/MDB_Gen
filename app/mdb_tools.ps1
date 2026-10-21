@@ -2518,7 +2518,7 @@ function Get-FcRefreshPreservedFieldNames {
         }
         'Klant' {
             return @(
-                'Dempingswaarde1A', 'Specificatie1A', 'Dempingswaarde1Z', 'Specificatie1Z',
+                'Specificatie1A', 'Dempingswaarde1Z', 'Specificatie1Z',
                 'Dempingswaarde2A', 'Specificatie2A', 'Dempingswaarde2Z', 'Specificatie2Z',
                 'X', 'Y', 'ImportResult', 'COMPLEX', 'ALIASNAAM', 'FTU_SERIENUMMER'
             )
