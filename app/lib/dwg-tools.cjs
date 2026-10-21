@@ -3,6 +3,7 @@ const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { PDFParse } = require('pdf-parse');
 
 const { Dwg_File_Type, LibreDwg } = require('@mlightcad/libredwg-web');
 const {
@@ -441,78 +442,289 @@ function buildCreateMantelbuisLisp({ outputFilePath, progressFilePath }) {
   return `(setq fmdb-output-file "${escapeLispString(toAutoLispPath(outputFilePath))}")
 ${buildProgressHelpersLisp(progressFilePath)}
 (vl-load-com)
-(defun fmdb-mantelbuis-write (material firstPoint lastPoint / handle)
+(defun fmdb-mantelbuis-write (kind material firstPoint lastPoint / handle)
   (setq handle (open fmdb-output-file "a"))
-  (if handle (progn (write-line (strcat material "\t" (rtos (car firstPoint) 2 8) "\t" (rtos (cadr firstPoint) 2 8) "\t" (rtos (car lastPoint) 2 8) "\t" (rtos (cadr lastPoint) 2 8)) handle) (close handle) T) nil)
+  (if handle (progn (write-line (strcat kind "\t" material "\t" (rtos (car firstPoint) 2 8) "\t" (rtos (cadr firstPoint) 2 8) "\t" (rtos (car lastPoint) 2 8) "\t" (rtos (cadr lastPoint) 2 8)) handle) (close handle) T) nil)
 )
-(defun fmdb-mantelbuis-points (object / raw values points)
+(defun fmdb-mantelbuis-point-list (value / raw)
+  (cond
+    ((= (type value) 'LIST) value)
+    ((= (type value) 'VARIANT) (fmdb-mantelbuis-point-list (vlax-variant-value value)))
+    ((= (type value) 'SAFEARRAY) (vlax-safearray->list value))
+    (t nil)
+  )
+)
+(defun fmdb-mantelbuis-points (object / raw values points step)
   (setq raw (vl-catch-all-apply 'vlax-get (list object 'Coordinates)))
   (if (vl-catch-all-error-p raw) nil (progn
-    (setq values (vlax-safearray->list (vlax-variant-value raw)) points nil)
-    (while values (setq points (append points (list (list (car values) (cadr values) (caddr values)))) values (cdddr values)))
+    (setq values (fmdb-mantelbuis-point-list raw) points nil step (if (= (vla-get-ObjectName object) "AcDbPolyline") 2 3))
+    (while (and values (cadr values))
+      (setq points (append points (list (list (car values) (cadr values) 0.0))))
+      (setq values (if (= step 2) (cddr values) (cdddr values)))
+    )
     points
   ))
 )
-(defun fmdb-mantelbuis-convert (entity material / object points firstPoint lastPoint newEntity)
-  (setq object (vlax-ename->vla-object entity) points (fmdb-mantelbuis-points object))
+(defun fmdb-mantelbuis-material (value / normalized)
+  (setq normalized (vl-string-translate " -_" "" (strcase (if value value ""))))
+  (cond
+    ((member normalized '("HDPE40" "HDPE50" "HDPE63" "HDPE110" "HDPE160" "HDPE200" "FLEX50" "FLEX63" "FLEX110" "FLEX125" "ST63" "ST110" "ST160")) normalized)
+    (t nil)
+  )
+)
+(defun fmdb-mantelbuis-distance (point firstPoint lastPoint / dx dy length projection nearX nearY)
+  (setq dx (- (car lastPoint) (car firstPoint)) dy (- (cadr lastPoint) (cadr firstPoint)))
+  (setq length (+ (* dx dx) (* dy dy)))
+  (if (< length 0.000001) (distance point firstPoint) (progn
+    (setq projection (/ (+ (* (- (car point) (car firstPoint)) dx) (* (- (cadr point) (cadr firstPoint)) dy)) length))
+    (setq projection (max 0.0 (min 1.0 projection)))
+    (setq nearX (+ (car firstPoint) (* projection dx)) nearY (+ (cadr firstPoint) (* projection dy)))
+    (distance point (list nearX nearY 0.0))
+  ))
+)
+(defun fmdb-mantelbuis-text (object / value)
+  (setq value nil)
+  (if (vlax-property-available-p object 'TextString)
+    (setq value (vl-catch-all-apply 'vlax-get (list object 'TextString)))
+  )
+  (if (vl-catch-all-error-p value) nil value)
+)
+(defun fmdb-mantelbuis-text-point (object / point minimumPoint maximumPoint minimumList maximumList)
+  (setq point nil)
+  (foreach property '(TextLocation InsertionPoint TextAlignmentPoint)
+    (if (and (not point) (vlax-property-available-p object property)) (setq point (vl-catch-all-apply 'vlax-get (list object property))))
+  )
+  (if (and point (not (vl-catch-all-error-p point)))
+    (setq point (fmdb-mantelbuis-point-list point))
+    (setq point nil)
+  )
+  (if (not point)
+    (progn
+      (vl-catch-all-apply 'vla-GetBoundingBox (list object 'minimumPoint 'maximumPoint))
+      (setq minimumList (fmdb-mantelbuis-point-list minimumPoint) maximumList (fmdb-mantelbuis-point-list maximumPoint))
+      (if (and minimumList maximumList)
+        (setq point (list (/ (+ (car minimumList) (car maximumList)) 2.0) (/ (+ (cadr minimumList) (cadr maximumList)) 2.0) 0.0))
+      )
+    )
+  )
+  point
+)
+(defun fmdb-mantelbuis-near-material (points texts / firstPoint lastPoint candidate distanceValue best bestDistance ambiguous)
+  (setq firstPoint (car points) lastPoint (car (reverse points)) best nil bestDistance nil ambiguous nil)
+  (foreach candidate texts
+    (setq distanceValue (fmdb-mantelbuis-distance (cdr candidate) firstPoint lastPoint))
+    (if (<= distanceValue 5.0)
+      (cond
+        ((or (not bestDistance) (< distanceValue (- bestDistance 0.01))) (setq best (car candidate) bestDistance distanceValue ambiguous nil))
+        ((and (<= (abs (- distanceValue bestDistance)) 0.01) (not (equal (car candidate) best))) (setq ambiguous T))
+      )
+    )
+  )
+  (if ambiguous nil best)
+)
+(defun fmdb-mantelbuis-boring-reference-p (value)
+  (and value (wcmatch (strcase value) "*BORING*.DWG*"))
+)
+(defun fmdb-mantelbuis-entity-points (entity entityData / objectName code item points nextEntity nextData)
+  (setq objectName (cdr (assoc 0 entityData)) code (if (= objectName "MLINE") 11 10) points nil)
+  (if (= objectName "POLYLINE")
+    (progn
+      (setq nextEntity (entnext entity))
+      (while nextEntity
+        (setq nextData (entget nextEntity))
+        (cond
+          ((= (cdr (assoc 0 nextData)) "VERTEX") (setq points (append points (list (cdr (assoc 10 nextData))))))
+          ((= (cdr (assoc 0 nextData)) "SEQEND") (setq nextEntity nil))
+        )
+        (if nextEntity (setq nextEntity (entnext nextEntity)))
+      )
+    )
+    (foreach item entityData (if (= (car item) code) (setq points (append points (list (cdr item))))))
+  )
+  points
+)
+(defun fmdb-mantelbuis-convert (entity material points / firstPoint lastPoint newEntity)
   (if (and points (> (length points) 1)) (progn
-    (setq newEntity (entmakex (append (list '(0 . "LWPOLYLINE") (cons 8 material) (cons 90 (length points)) (cons 70 0)) (mapcar '(lambda (point) (cons 10 (list (car point) (cadr point)))) points))))
+    (if (not (tblsearch "LAYER" material))
+      (entmake (list '(0 . "LAYER") '(100 . "AcDbSymbolTableRecord") '(100 . "AcDbLayerTableRecord") (cons 2 material) '(70 . 0) '(62 . 3) '(6 . "Continuous")))
+    )
+    (setq newEntity (entmakex (append (list '(0 . "LWPOLYLINE") '(100 . "AcDbEntity") (cons 8 material) '(100 . "AcDbPolyline") (cons 90 (length points)) (cons 70 0)) (mapcar '(lambda (point) (cons 10 (list (car point) (cadr point)))) points))))
     (if newEntity (progn
-      (entdel entity) (setq firstPoint (car points) lastPoint (car (reverse points))) (fmdb-mantelbuis-write material firstPoint lastPoint) T
+      (entdel entity) (setq firstPoint (car points) lastPoint (car (reverse points))) (fmdb-mantelbuis-write "DUCT" material firstPoint lastPoint) T
     ) nil)
   ) nil)
 )
-(defun c:${CREATE_MANTELBUIS_COMMAND_NAME} (/ oldError oldOsMode oldClayer oldFileDia oldCmdEcho selection textEntity textData material mlines index converted continue)
-  (setq oldError *error* oldOsMode (getvar "OSMODE") oldClayer (getvar "CLAYER") oldFileDia (getvar "FILEDIA") oldCmdEcho (getvar "CMDECHO") converted 0 continue T)
+(defun c:${CREATE_MANTELBUIS_COMMAND_NAME} (/ oldError oldOsMode oldClayer oldFileDia oldCmdEcho outputHandle selection index entity entityData object objectName text point texts points material converted scanned missing ambiguous)
+  (setq oldError *error* oldOsMode (getvar "OSMODE") oldClayer (getvar "CLAYER") oldFileDia (getvar "FILEDIA") oldCmdEcho (getvar "CMDECHO") converted 0 scanned 0 missing 0 ambiguous 0 texts nil)
   (defun *error* (message)
     (setvar "OSMODE" oldOsMode) (setvar "CLAYER" oldClayer) (setvar "FILEDIA" oldFileDia) (setvar "CMDECHO" oldCmdEcho)
     (if (and message (not (wcmatch (strcase message) "*CANCEL*,*EXIT*,*BREAK*"))) (fmdb-report-result "ERROR" message))
-    (fmdb-report-result "CONVERTED" (itoa converted)) (fmdb-report-done "MANTELBUIS") (setq *error* oldError) (princ)
+    (fmdb-report-result "CONVERTED" (itoa converted)) (fmdb-report-result "REVIEW" (itoa (+ missing ambiguous))) (fmdb-report-done "MANTELBUIS") (setq *error* oldError) (princ)
   )
-  (setq textEntity (open fmdb-output-file "w"))
-  (if textEntity (close textEntity) (progn (fmdb-report-result "ERROR" "No se puede abrir el fichero de salida.") (setq continue nil)))
-  (setvar "CMDECHO" 0) (fmdb-report-stage "select")
-  (while continue
-    (setq selection (entsel "\\nSeleccione TEXT/MTEXT con el material (Enter para terminar): "))
-    (if (not selection) (setq continue nil) (progn
-      (setq textEntity (car selection) textData (entget textEntity))
-      (if (not (member (cdr (assoc 0 textData)) '("TEXT" "MTEXT")))
-        (prompt "\\nDebe seleccionar un TEXT o MTEXT.")
-        (progn
-          (setq material (vl-string-trim " " (vla-get-TextString (vlax-ename->vla-object textEntity))))
-          (if (not (snvalid material))
-            (prompt (strcat "\\nLayer/material invalido: " material))
-            (progn
-              (if (not (tblsearch "LAYER" material)) (command "_.-LAYER" "_Make" material ""))
-              (prompt (strcat "\\nSeleccione una o varias MLINE para " material " (Enter para terminar): "))
-              (setq mlines (ssget '((0 . "MLINE"))))
-              (if mlines (progn (setq index 0) (repeat (sslength mlines) (if (fmdb-mantelbuis-convert (ssname mlines index) material) (setq converted (1+ converted))) (setq index (1+ index)))))
-            )
-          )
-        )
-      )
+  (setq outputHandle (open fmdb-output-file "w"))
+  (if outputHandle (close outputHandle) (fmdb-report-result "ERROR" "No se puede abrir el fichero de salida."))
+  (setvar "CMDECHO" 0) (fmdb-report-stage "scan")
+  (if outputHandle (progn
+    (fmdb-report-stage "texts")
+    (setq selection (ssget "_X" '((0 . "TEXT,MTEXT,MULTILEADER"))) index 0)
+    (if selection (repeat (sslength selection)
+      (setq entity (ssname selection index))
+      (setq entityData (entget entity) objectName (cdr (assoc 0 entityData)))
+      (if (member objectName '("TEXT" "MTEXT" "MULTILEADER")) (progn
+        (setq text (if (= objectName "MULTILEADER") (cdr (assoc 304 entityData)) (cdr (assoc 1 entityData))))
+        (setq material (fmdb-mantelbuis-material text) point (cdr (assoc 10 entityData)))
+        (if (and material point) (setq texts (cons (cons material point) texts)))
+        (if (and point (fmdb-mantelbuis-boring-reference-p text)) (fmdb-mantelbuis-write "REFERENCE" text point point))
+      ))
+      (setq index (1+ index))
     ))
-  )
+    (fmdb-report-stage "geometry")
+    (setq selection (ssget "_X" '((0 . "MLINE,LWPOLYLINE,POLYLINE"))) index 0)
+    (if selection (repeat (sslength selection)
+      (setq entity (ssname selection index))
+      (setq entityData (entget entity) objectName (cdr (assoc 0 entityData)))
+      (if (member objectName '("MLINE" "LWPOLYLINE" "POLYLINE")) (progn
+        (setq points (fmdb-mantelbuis-entity-points entity entityData))
+        (if (and points (> (length points) 1)) (progn
+          (fmdb-mantelbuis-write "LINE" "" (car points) (car (reverse points)))
+          (setq material (fmdb-mantelbuis-material (cdr (assoc 8 entityData))))
+          (if (= objectName "MLINE") (progn
+            (setq scanned (1+ scanned))
+            (if (not material) (setq material (fmdb-mantelbuis-near-material points texts)))
+            (if material
+              (if (fmdb-mantelbuis-convert entity material points) (setq converted (1+ converted)) (setq missing (1+ missing)))
+              (setq missing (1+ missing))
+            )
+          ))
+          (if (and (not (equal objectName "MLINE")) material)
+            (fmdb-mantelbuis-write "DUCT" material (car points) (car (reverse points)))
+          )
+        ))
+      ))
+      (setq index (1+ index))
+    ))
+  ))
   (setvar "OSMODE" oldOsMode) (setvar "CLAYER" oldClayer) (setvar "FILEDIA" oldFileDia) (setvar "CMDECHO" oldCmdEcho)
-  (fmdb-report-result "CONVERTED" (itoa converted)) (fmdb-report-done "MANTELBUIS") (setq *error* oldError) (princ)
+  (fmdb-report-result "SCANNED" (itoa scanned)) (fmdb-report-result "CONVERTED" (itoa converted)) (fmdb-report-result "REVIEW" (itoa (+ missing ambiguous))) (fmdb-report-done "MANTELBUIS") (setq *error* oldError) (princ)
 )
 `;
+}
+
+function normalizeMantelbuisMaterial(value, { boring = false } = {}) {
+  const material = String(value ?? '').replace(/[\s_-]/g, '').toUpperCase();
+  const match = material.match(/^(HDPE|HPE|FLEX|ST)(40|50|63|110|125|160|200)$/);
+  if (!match) return null;
+  const family = match[1] === 'HPE' ? 'HDPE' : match[1];
+  const base = `${family}${match[2]}`;
+  const allowed = new Set(['HDPE40', 'HDPE50', 'HDPE63', 'HDPE110', 'HDPE160', 'HDPE200', 'FLEX50', 'FLEX63', 'FLEX110', 'FLEX125', 'ST63', 'ST110', 'ST160']);
+  if (!allowed.has(base)) return null;
+  if (boring && family === 'HDPE') return `${base}-Zwart`;
+  if (family === 'HDPE' || base === 'FLEX50' || base === 'FLEX63') return `${base}-Oranje`;
+  return base;
+}
+
+function extractBoringMaterial(text) {
+  const source = String(text ?? '').toUpperCase();
+  const familyFirst = source.match(/\b(HDPE|HPE|FLEX|ST)\s*[- ]?\s*(40|50|63|110|125|160|200)\b/);
+  if (familyFirst) return normalizeMantelbuisMaterial(`${familyFirst[1]}${familyFirst[2]}`, { boring: true });
+  const diameterFirst = source.match(/(?:Ø|⌀|DIA(?:METER)?\.?\s*)?\s*(40|50|63|110|125|160|200)\s*(HDPE|HPE|FLEX|ST)\b/);
+  return diameterFirst ? normalizeMantelbuisMaterial(`${diameterFirst[2]}${diameterFirst[1]}`, { boring: true }) : null;
+}
+
+function extractBoringCoordinates(text) {
+  const source = String(text ?? '').replace(/\r/g, '');
+  const parsePoint = (label) => {
+    const match = source.match(new RegExp(`${label}[\\s\\S]{0,240}?X\\s*=\\s*([+-]?\\d+(?:[.,]\\d+)?)[\\s\\S]{0,80}?Y\\s*=\\s*([+-]?\\d+(?:[.,]\\d+)?)`, 'i'));
+    if (!match) return null;
+    const x = Number(match[1].replace(',', '.'));
+    const y = Number(match[2].replace(',', '.'));
+    return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+  };
+  const entrance = parsePoint('INTREDEPUNT');
+  const exit = parsePoint('UITTREDEPUNT');
+  return entrance && exit ? { X_A: entrance.x, Y_A: entrance.y, X_B: exit.x, Y_B: exit.y } : null;
+}
+
+function parseMantelbuisExport(text) {
+  const records = [];
+  for (const line of String(text ?? '').replace(/\r/g, '').split('\n')) {
+    const [kind, value, xA, yA, xB, yB] = line.split('\t');
+    const values = [xA, yA, xB, yB].map(Number);
+    if (!['DUCT', 'LINE', 'REFERENCE'].includes(kind) || values.some((item) => !Number.isFinite(item))) continue;
+    records.push({ kind, value: normalizeText(value) ?? '', xA: values[0], yA: values[1], xB: values[2], yB: values[3] });
+  }
+  return records;
 }
 
 function parseMantelbuisRows(text) {
   const rows = [];
   const seen = new Set();
-  for (const line of String(text ?? '').replace(/\r/g, '').split('\n')) {
-    const [material, xA, yA, xB, yB] = line.split('\t');
-    const values = [xA, yA, xB, yB].map(Number);
-    const normalizedMaterial = normalizeText(material);
+  for (const record of parseMantelbuisExport(text)) {
+    const { kind, value: material, xA, yA, xB, yB } = record;
+    if (kind !== 'DUCT') continue;
+    const values = [xA, yA, xB, yB];
+    const normalizedMaterial = normalizeMantelbuisMaterial(material);
     if (!normalizedMaterial || values.some((value) => !Number.isFinite(value))) continue;
     const forward = `${Math.round(values[0] * 1000)}|${Math.round(values[1] * 1000)}|${Math.round(values[2] * 1000)}|${Math.round(values[3] * 1000)}`;
     const reverse = `${Math.round(values[2] * 1000)}|${Math.round(values[3] * 1000)}|${Math.round(values[0] * 1000)}|${Math.round(values[1] * 1000)}`;
     const key = `${normalizedMaterial.toUpperCase()}|${forward < reverse ? forward : reverse}`;
-    if (!seen.has(key)) { seen.add(key); rows.push({ X_A: values[0], Y_A: values[1], X_B: values[2], Y_B: values[3], Soort_Materie: normalizedMaterial, Boring_Type: 'Mantelbuis', Boorprofiel: '', ImportResult: '' }); }
+    if (!seen.has(key)) { seen.add(key); rows.push({ X_A: values[0], Y_A: values[1], X_B: values[2], Y_B: values[3], Soort_Materie: normalizedMaterial, Boring_Type: normalizedMaterial.startsWith('ST') ? 'Persing' : 'Mantelbuis', Boorprofiel: '', ImportResult: '' }); }
   }
   return rows;
+}
+
+function distanceToSegment(point, line) {
+  const dx = line.xB - line.xA;
+  const dy = line.yB - line.yA;
+  const lengthSquared = (dx * dx) + (dy * dy);
+  const factor = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1, (((point.xA - line.xA) * dx) + ((point.yA - line.yA) * dy)) / lengthSquared));
+  return Math.hypot(point.xA - (line.xA + (factor * dx)), point.yA - (line.yA + (factor * dy)));
+}
+
+async function readBoringPdfDetails(projectFolderPath, boringFileName) {
+  const folder = path.join(projectFolderPath, 'Boringen');
+  const stem = path.basename(boringFileName, path.extname(boringFileName)).replace(/[^a-z0-9]/gi, '').toLowerCase();
+  const entries = await fsp.readdir(folder, { withFileTypes: true }).catch(() => []);
+  const pdf = entries.find((entry) => entry.isFile() && path.extname(entry.name).toLowerCase() === '.pdf' && path.basename(entry.name, path.extname(entry.name)).replace(/[^a-z0-9]/gi, '').toLowerCase().includes(stem));
+  if (!pdf) return { material: null, coordinates: null };
+  try {
+    const parser = new PDFParse({ data: await fsp.readFile(path.join(folder, pdf.name)) });
+    try {
+      const text = (await parser.getText()).text ?? '';
+      return { material: extractBoringMaterial(text), coordinates: extractBoringCoordinates(text) };
+    }
+    finally { await parser.destroy().catch(() => {}); }
+  }
+  catch {
+    return { material: null, coordinates: null };
+  }
+}
+
+async function buildBoringRows(projectFolderPath, records) {
+  const boringFolder = path.join(projectFolderPath, 'Boringen');
+  const dwgEntries = await fsp.readdir(boringFolder, { withFileTypes: true }).catch(() => []);
+  const boringFiles = dwgEntries.filter((entry) => entry.isFile() && /-Boring\d+\.dwg$/i.test(entry.name));
+  const lines = records.filter((record) => record.kind === 'LINE');
+  const rows = [];
+  const reviewItems = [];
+  for (const reference of records.filter((record) => record.kind === 'REFERENCE')) {
+    const referenceKey = normalizeBoringReference(reference.value);
+    const file = boringFiles.find((item) => normalizeBoringReference(item.name) === referenceKey);
+    if (!file) { reviewItems.push(`${reference.value}: no coincide con un DWG de Boringen`); continue; }
+    const details = await readBoringPdfDetails(projectFolderPath, file.name);
+    if (!details.material) { reviewItems.push(`${file.name}: el PDF no contiene un material legible automaticamente`); continue; }
+    let coordinates = details.coordinates;
+    if (!coordinates) {
+      const ranked = lines.map((line) => ({ line, distance: distanceToSegment(reference, line) })).filter((item) => item.distance <= 20).sort((left, right) => left.distance - right.distance);
+      if (ranked.length === 0 || (ranked[1] && ranked[1].distance <= Math.max(0.25, ranked[0].distance * 1.15))) {
+        reviewItems.push(`${file.name}: el PDF no tiene coordenadas y no hay una geometria unica junto a la referencia`);
+        continue;
+      }
+      coordinates = { X_A: ranked[0].line.xA, Y_A: ranked[0].line.yA, X_B: ranked[0].line.xB, Y_B: ranked[0].line.yB };
+    }
+    rows.push({ ...coordinates, Soort_Materie: details.material, Boring_Type: 'Gestuurde Boring', Boorprofiel: file.name, ImportResult: '' });
+  }
+  return { rows, reviewItems };
 }
 
 async function createMantelbuis(projectFolderPath, options = {}) {
@@ -522,18 +734,29 @@ async function createMantelbuis(projectFolderPath, options = {}) {
   const lispFilePath = path.join(os.tmpdir(), `fiber-mantelbuis-${token}.lsp`);
   const outputFilePath = path.join(os.tmpdir(), `fiber-mantelbuis-${token}.tsv`);
   const progressFilePath = path.join(os.tmpdir(), `fiber-mantelbuis-${token}.progress`);
+  const scriptFilePath = path.join(os.tmpdir(), `fiber-mantelbuis-${token}.scr`);
   try {
     await fsp.writeFile(lispFilePath, buildCreateMantelbuisLisp({ outputFilePath, progressFilePath }), 'utf8');
     const monitor = startProgressMonitor(progressFilePath, { onStage: options.onStage, onResult: options.onResult });
-    let run; try { run = await tryRunCommandOnOpenDocument({ dwgPath, lispFilePath, commandName: CREATE_MANTELBUIS_COMMAND_NAME, progressFilePath, outputFilePath, timeoutMs: options.timeoutMs ?? (4 * 60 * 60 * 1000), saveDocument: true }); } finally { await monitor.stop(); }
-    if (!run?.handled) throw new Error('Abra el DWG del proyecto en AutoCAD antes de crear Mantelbuis. Esta herramienta necesita el documento abierto.');
+    const timeoutMs = options.timeoutMs ?? (4 * 60 * 60 * 1000);
+    let run; try { run = await tryRunCommandOnOpenDocument({ dwgPath, lispFilePath, commandName: CREATE_MANTELBUIS_COMMAND_NAME, progressFilePath, outputFilePath, timeoutMs, saveDocument: true });
+      if (!run?.handled) { const accoreConsolePath = await findAccoreConsolePath(); if (!accoreConsolePath) throw new Error('No se ha encontrado accoreconsole.exe. Hace falta AutoCAD abierto o una instalacion local de AutoCAD.'); await runAccoreConsoleCommand({ accoreConsolePath, dwgPath, lispFilePath, scriptFilePath, commandName: CREATE_MANTELBUIS_COMMAND_NAME, timeoutMs, saveDocument: true }); }
+    } finally { await monitor.stop(); }
     const progress = await fsp.readFile(progressFilePath, 'utf8').catch(() => '');
     const error = progress.match(/FMDB_RESULT:ERROR=([^\r\n]+)/i)?.[1];
     if (error) throw new Error(`AutoCAD no ha podido crear Mantelbuis: ${error}`);
     if (!/FMDB_DONE:MANTELBUIS/i.test(progress)) throw new Error('AutoCAD no ha finalizado correctamente Crear Mantelbuis.');
-    const rows = parseMantelbuisRows(await fsp.readFile(outputFilePath, 'utf8').catch(() => ''));
-    return { dwgPath, convertedCount: Number(progress.match(/FMDB_RESULT:CONVERTED=(\d+)/i)?.[1] ?? 0), rows, cancelled: rows.length === 0 };
-  } finally { await Promise.all([lispFilePath, outputFilePath, progressFilePath].map((target) => removeFileIfExists(target))); }
+    const exportText = await fsp.readFile(outputFilePath, 'utf8').catch(() => '');
+    const records = parseMantelbuisExport(exportText);
+    const boring = await buildBoringRows(projectFolderPath, records);
+    const rows = [...parseMantelbuisRows(exportText), ...boring.rows];
+    const unresolvedGeometryCount = Number(progress.match(/FMDB_RESULT:REVIEW=(\d+)/i)?.[1] ?? 0);
+    const reviewItems = [
+      ...(unresolvedGeometryCount > 0 ? [`${unresolvedGeometryCount} MLINE sin material unico a menos de 5 m`] : []),
+      ...boring.reviewItems
+    ];
+    return { dwgPath, convertedCount: Number(progress.match(/FMDB_RESULT:CONVERTED=(\d+)/i)?.[1] ?? 0), reviewCount: unresolvedGeometryCount + boring.reviewItems.length, reviewItems, rows, cancelled: rows.length === 0 };
+  } finally { await Promise.all([lispFilePath, outputFilePath, progressFilePath, scriptFilePath].map((target) => removeFileIfExists(target))); }
 }
 
 function getAccoreConsolePriority(version) {
@@ -3260,6 +3483,10 @@ module.exports = {
     buildCrossingDpGroups,
     buildCrossingDpLisp,
     buildCreateMantelbuisLisp,
+    extractBoringCoordinates,
+    extractBoringMaterial,
+    normalizeMantelbuisMaterial,
+    parseMantelbuisExport,
     parseMantelbuisRows,
     parseRoutingProblemLabelsFromCheckHtml
   },

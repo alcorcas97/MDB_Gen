@@ -3564,7 +3564,7 @@ ipcMain.handle('dwg:create-mantelbuis', async (_event, payload) => {
     const { createMantelbuis } = getDwgToolsModule();
     const result = await createMantelbuis(payload.projectFolderPath, {
       onStage: (stage) => {
-        if (String(stage).toLowerCase() === 'select') sendGenerationEvent({ type: 'status', message: 'Seleccione en AutoCAD el material y las MLINE de cada grupo.' });
+        if (String(stage).toLowerCase() === 'scan') sendGenerationEvent({ type: 'status', message: 'Escaneando automaticamente MLINE, polilineas y referencias de boringen...' });
       }
     });
     if (result.rows.length === 0) {
@@ -3574,6 +3574,7 @@ ipcMain.handle('dwg:create-mantelbuis', async (_event, payload) => {
 
     await fsp.writeFile(assignmentsPath, JSON.stringify({ rows: result.rows }), 'utf8');
     const applied = await runMdbToolsJson(['-Mode', 'ApplyMantelbuis', '-MdbPath', workingMdbPath, '-AssignmentsPath', assignmentsPath], { skipHistory: true });
+    if (result.reviewCount > 0) sendGenerationEvent({ type: 'log', level: 'warning', message: `Crear Mantelbuis: ${result.reviewCount} elemento(s) requieren revision:\n${result.reviewItems.map((item) => `- ${item}`).join('\n')}\n` });
     if (backup) await updateOperationBackup({ projectPath: payload.projectFolderPath, entryId: backup.id, status: 'completed', summary: { ...summarizeOperationResult(applied), convertedCount: result.convertedCount } });
     return { ...result, ...applied, mdbPath: workingMdbPath };
   } catch (error) {

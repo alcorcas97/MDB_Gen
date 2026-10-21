@@ -1368,9 +1368,9 @@ async function createBuiseind() {
 
 async function createMantelbuis() {
   await runProjectTool({
-    startMessage: 'Preparando Crear Mantelbuis; abra el DWG y seleccione material y MLINE en AutoCAD...',
-    successMessage: (result) => result.cancelled ? 'No se seleccionaron MLINE; la MDB no se ha modificado.' : `Mantelbuis creado: ${result.insertedCount} filas nuevas (${result.skippedCount} duplicadas).`,
-    successLog: (result) => result.cancelled ? 'Crear Mantelbuis cancelado sin cambios en la MDB.' : `Mantelbuis: ${result.convertedCount} MLINE convertidas; ${result.insertedCount} filas insertadas; ${result.skippedCount} duplicadas conservadas.`,
+    startMessage: 'Escaneando automaticamente el DWG para Crear Mantelbuis...',
+    successMessage: (result) => result.cancelled ? 'No se encontraron trazados con material fiable; la MDB no se ha modificado.' : `Mantelbuis creado: ${result.insertedCount} filas nuevas (${result.skippedCount} duplicadas).${result.reviewCount ? ` ${result.reviewCount} requieren revision.` : ''}`,
+    successLog: (result) => result.cancelled ? 'Crear Mantelbuis termino sin filas aplicables.' : `Mantelbuis: ${result.convertedCount} MLINE convertidas; ${result.insertedCount} filas insertadas; ${result.skippedCount} duplicadas conservadas; ${result.reviewCount ?? 0} para revision.`,
     action: (payload) => fiberDesktopApi.createMantelbuis(payload)
   });
 }

@@ -2183,7 +2183,11 @@ function Get-MantelbuisGeometryKey {
     if ($null -eq $material -or @($values | Where-Object { $null -eq $_ }).Count -gt 0) { return $null }
     $forward = '{0}|{1}|{2}|{3}' -f [math]::Round($values[0] * 1000), [math]::Round($values[1] * 1000), [math]::Round($values[2] * 1000), [math]::Round($values[3] * 1000)
     $reverse = '{0}|{1}|{2}|{3}' -f [math]::Round($values[2] * 1000), [math]::Round($values[3] * 1000), [math]::Round($values[0] * 1000), [math]::Round($values[1] * 1000)
-    return '{0}|{1}' -f $material.ToUpperInvariant(), $(if ([string]::CompareOrdinal($forward, $reverse) -le 0) { $forward } else { $reverse })
+    $boringType = Normalize-Text $Row.Boring_Type
+    $profile = Normalize-Text $Row.Boorprofiel
+    if ($null -eq $boringType) { $boringType = '' }
+    if ($null -eq $profile) { $profile = '' }
+    return '{0}|{1}|{2}|{3}' -f $material.ToUpperInvariant(), $boringType.ToUpperInvariant(), $profile.ToUpperInvariant(), $(if ([string]::CompareOrdinal($forward, $reverse) -le 0) { $forward } else { $reverse })
 }
 
 function Apply-Mantelbuis {
@@ -2216,7 +2220,10 @@ function Apply-Mantelbuis {
         $seen[$key] = $true
         $survivors += [pscustomobject][ordered]@{
             X_A = [double]$row.X_A; Y_A = [double]$row.Y_A; X_B = [double]$row.X_B; Y_B = [double]$row.Y_B
-            Boring_Type = 'Mantelbuis'; Soort_Materie = Normalize-Text $row.Soort_Materie; Boorprofiel = ''; ImportResult = ''
+            Boring_Type = $(if (Normalize-Text $row.Boring_Type) { Normalize-Text $row.Boring_Type } else { 'Mantelbuis' })
+            Soort_Materie = Normalize-Text $row.Soort_Materie
+            Boorprofiel = $(if (Normalize-Text $row.Boorprofiel) { Normalize-Text $row.Boorprofiel } else { '' })
+            ImportResult = $(if (Normalize-Text $row.ImportResult) { Normalize-Text $row.ImportResult } else { '' })
         }
         $inserted++
     }
