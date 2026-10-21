@@ -7,7 +7,7 @@ const { _internal } = require('../app/lib/dwg-tools.cjs');
 
 test('Mantelbuis LISP exports endpoints and restores material polylines as DRILLING MLINE', () => {
   const lisp = _internal.buildCreateMantelbuisLisp({ outputFilePath: 'C:\\temp\\mantelbuis.tsv', progressFilePath: 'C:\\temp\\mantelbuis.progress' });
-  for (const token of ['LWPOLYLINE', 'MLINE,LWPOLYLINE,POLYLINE', 'TEXT,MTEXT,MULTILEADER', '(ssget "_X"', 'fmdb-mantelbuis-near-material', 'fmdb-mantelbuis-restore-drilling', '(list "CMLSTYLE" "DRILLING")', '(command "_.MLINE")', '(entdel entity)', '(setvar "OSMODE" 0)', 'CLAYER', 'FILEDIA', 'CMDECHO', 'CMLJUST', 'CMLSCALE', '(fmdb-report-result "RESTORED"', '(fmdb-report-done "MANTELBUIS")']) {
+  for (const token of ['LWPOLYLINE', 'MLINE,LWPOLYLINE,POLYLINE', 'TEXT,MTEXT,MULTILEADER', '(ssget "_X"', 'fmdb-mantelbuis-near-material', 'fmdb-mantelbuis-angle-difference', '(* 5.0 (fmdb-mantelbuis-angle-difference lineAngle angleValue))', '(cdr (assoc 50 entityData))', 'fmdb-mantelbuis-restore-drilling', '(list "CMLSTYLE" "DRILLING")', '(command "_.MLINE")', '(entdel entity)', '(setvar "OSMODE" 0)', 'CLAYER', 'FILEDIA', 'CMDECHO', 'CMLJUST', 'CMLSCALE', '(fmdb-report-result "RESTORED"', '(fmdb-report-done "MANTELBUIS")']) {
     assert.match(lisp, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.doesNotMatch(lisp, /\bentsel\b/i);
@@ -39,7 +39,7 @@ test('Mantelbuis parser normalizes materials, assigns boring type and deduplicat
 
 test('Mantelbuis PowerShell contract applies directly to Mantelbuis and compacts IDs', () => {
   const script = fs.readFileSync(path.join(__dirname, '..', 'app', 'mdb_tools.ps1'), 'utf8');
-  for (const token of ['ApplyMantelbuis', 'function Apply-Mantelbuis', "-TableNames @('Mantelbuis')", "-TableName 'Mantelbuis'", 'Test-ContiguousTableIds', 'Boring_Type = $(if (Normalize-Text $row.Boring_Type)', 'Boorprofiel = $(if (Normalize-Text $row.Boorprofiel)']) {
+  for (const token of ['ApplyMantelbuis', 'function Apply-Mantelbuis', 'function Get-MantelbuisCoordinateKey', '$incomingCoordinates.ContainsKey($coordinateKey)', 'replacedCount = $replaced', "-TableNames @('Mantelbuis')", "-TableName 'Mantelbuis'", 'Test-ContiguousTableIds', 'Boring_Type = $(if (Normalize-Text $row.Boring_Type)', 'Boorprofiel = $(if (Normalize-Text $row.Boorprofiel)']) {
     assert.match(script, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
 });

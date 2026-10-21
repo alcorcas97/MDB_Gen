@@ -1369,8 +1369,8 @@ async function createBuiseind() {
 async function createMantelbuis() {
   await runProjectTool({
     startMessage: 'Escaneando automaticamente el DWG para Crear Mantelbuis...',
-    successMessage: (result) => result.cancelled ? 'No se encontraron trazados con material fiable; la MDB no se ha modificado.' : `Mantelbuis creado: ${result.insertedCount} filas nuevas (${result.skippedCount} duplicadas).${result.reviewCount ? ` ${result.reviewCount} requieren revision.` : ''}`,
-    successLog: (result) => result.cancelled ? 'Crear Mantelbuis termino sin filas aplicables.' : `Mantelbuis: ${result.convertedCount} trazados procesados; ${result.restoredCount ?? 0} polilineas restauradas como MLINE DRILLING; ${result.insertedCount} filas insertadas; ${result.skippedCount} duplicadas conservadas; ${result.reviewCount ?? 0} para revision.`,
+    successMessage: (result) => result.cancelled ? 'No se encontraron trazados con material fiable; la MDB no se ha modificado.' : `Mantelbuis creado: ${result.insertedCount} filas nuevas, ${result.replacedCount ?? 0} corregidas (${result.skippedCount} sin cambios).${result.reviewCount ? ` ${result.reviewCount} requieren revision.` : ''}`,
+    successLog: (result) => result.cancelled ? 'Crear Mantelbuis termino sin filas aplicables.' : `Mantelbuis: ${result.convertedCount} trazados procesados; ${result.restoredCount ?? 0} polilineas restauradas como MLINE DRILLING; ${result.insertedCount} filas insertadas; ${result.replacedCount ?? 0} materiales corregidos; ${result.skippedCount} filas conservadas; ${result.reviewCount ?? 0} para revision.`,
     action: (payload) => fiberDesktopApi.createMantelbuis(payload)
   });
 }

@@ -2179,15 +2179,23 @@ function Get-MantelbuisGeometryKey {
     param([object]$Row)
 
     $material = Normalize-Text $Row.Soort_Materie
-    $values = @($Row.X_A, $Row.Y_A, $Row.X_B, $Row.Y_B | ForEach-Object { Convert-ToNullableDouble $_ })
-    if ($null -eq $material -or @($values | Where-Object { $null -eq $_ }).Count -gt 0) { return $null }
-    $forward = '{0}|{1}|{2}|{3}' -f [math]::Round($values[0] * 1000), [math]::Round($values[1] * 1000), [math]::Round($values[2] * 1000), [math]::Round($values[3] * 1000)
-    $reverse = '{0}|{1}|{2}|{3}' -f [math]::Round($values[2] * 1000), [math]::Round($values[3] * 1000), [math]::Round($values[0] * 1000), [math]::Round($values[1] * 1000)
+    $coordinateKey = Get-MantelbuisCoordinateKey $Row
+    if ($null -eq $material -or $null -eq $coordinateKey) { return $null }
     $boringType = Normalize-Text $Row.Boring_Type
     $profile = Normalize-Text $Row.Boorprofiel
     if ($null -eq $boringType) { $boringType = '' }
     if ($null -eq $profile) { $profile = '' }
-    return '{0}|{1}|{2}|{3}' -f $material.ToUpperInvariant(), $boringType.ToUpperInvariant(), $profile.ToUpperInvariant(), $(if ([string]::CompareOrdinal($forward, $reverse) -le 0) { $forward } else { $reverse })
+    return '{0}|{1}|{2}|{3}' -f $material.ToUpperInvariant(), $boringType.ToUpperInvariant(), $profile.ToUpperInvariant(), $coordinateKey
+}
+
+function Get-MantelbuisCoordinateKey {
+    param([object]$Row)
+
+    $values = @($Row.X_A, $Row.Y_A, $Row.X_B, $Row.Y_B | ForEach-Object { Convert-ToNullableDouble $_ })
+    if (@($values | Where-Object { $null -eq $_ }).Count -gt 0) { return $null }
+    $forward = '{0}|{1}|{2}|{3}' -f [math]::Round($values[0] * 1000), [math]::Round($values[1] * 1000), [math]::Round($values[2] * 1000), [math]::Round($values[3] * 1000)
+    $reverse = '{0}|{1}|{2}|{3}' -f [math]::Round($values[2] * 1000), [math]::Round($values[3] * 1000), [math]::Round($values[0] * 1000), [math]::Round($values[1] * 1000)
+    return $(if ([string]::CompareOrdinal($forward, $reverse) -le 0) { $forward } else { $reverse })
 }
 
 function Apply-Mantelbuis {
@@ -2198,14 +2206,30 @@ function Apply-Mantelbuis {
 
     if (-not (Test-Path -LiteralPath $Path)) { throw "No se ha encontrado el fichero temporal de Mantelbuis: $Path" }
     $payload = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
-    $incoming = if ($payload.PSObject.Properties.Name -contains 'rows') { @($payload.rows) } else { @() }
+    $incoming = @(if ($payload.PSObject.Properties.Name -contains 'rows') { @($payload.rows) } else { @() })
     if ($incoming.Count -eq 0) { return [pscustomobject]@{ insertedCount = 0; skippedCount = 0; totalCount = @(Get-TableRows -Database $Database -TableName 'Mantelbuis').Count } }
+
+    $incomingKeys = @{}
+    $incomingCoordinates = @{}
+    foreach ($row in $incoming) {
+        $key = Get-MantelbuisGeometryKey $row
+        $coordinateKey = Get-MantelbuisCoordinateKey $row
+        if ($null -eq $key -or $null -eq $coordinateKey) { throw 'Una fila de Mantelbuis no tiene coordenadas/material validos.' }
+        $incomingKeys[$key] = $true
+        $incomingCoordinates[$coordinateKey] = $true
+    }
 
     $seen = @{}
     $survivors = @()
+    $replaced = 0
     $existing = @(Get-TableRows -Database $Database -TableName 'Mantelbuis' | Sort-Object ID)
     foreach ($row in $existing) {
         $key = Get-MantelbuisGeometryKey $row
+        $coordinateKey = Get-MantelbuisCoordinateKey $row
+        if ($null -ne $coordinateKey -and $incomingCoordinates.ContainsKey($coordinateKey) -and ($null -eq $key -or -not $incomingKeys.ContainsKey($key))) {
+            $replaced++
+            continue
+        }
         if ($null -eq $key -or -not $seen.ContainsKey($key)) {
             if ($null -ne $key) { $seen[$key] = $true }
             $survivors += $row
@@ -2232,7 +2256,7 @@ function Apply-Mantelbuis {
     Write-AccessTable -Database $Database -TableName 'Mantelbuis' -Rows $survivors
     $idCheck = Test-ContiguousTableIds -Database $Database -TableName 'Mantelbuis'
     if (-not $idCheck.contiguousFromOne) { throw 'Los IDs de Mantelbuis no quedaron consecutivos desde 1.' }
-    return [pscustomobject]@{ insertedCount = $inserted; skippedCount = $skipped; totalCount = $survivors.Count; idCheck = $idCheck }
+    return [pscustomobject]@{ insertedCount = $inserted; replacedCount = $replaced; skippedCount = $skipped; totalCount = $survivors.Count; idCheck = $idCheck }
 }
 
 function Get-TableRows {

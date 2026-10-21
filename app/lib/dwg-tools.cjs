@@ -509,14 +509,23 @@ ${buildProgressHelpersLisp(progressFilePath)}
   )
   point
 )
-(defun fmdb-mantelbuis-near-material (points texts / firstPoint lastPoint candidate distanceValue best bestDistance ambiguous)
-  (setq firstPoint (car points) lastPoint (car (reverse points)) best nil bestDistance nil ambiguous nil)
+(defun fmdb-mantelbuis-angle-difference (firstAngle secondAngle / difference)
+  (setq difference (abs (- firstAngle secondAngle)))
+  (while (>= difference pi) (setq difference (- difference pi)))
+  (min difference (- pi difference))
+)
+(defun fmdb-mantelbuis-near-material (points texts / firstPoint lastPoint lineAngle candidate distanceValue angleValue scoreValue best bestScore ambiguous)
+  (setq firstPoint (car points) lastPoint (car (reverse points)) lineAngle (angle firstPoint lastPoint) best nil bestScore nil ambiguous nil)
   (foreach candidate texts
-    (setq distanceValue (fmdb-mantelbuis-distance (cdr candidate) firstPoint lastPoint))
+    (setq distanceValue (fmdb-mantelbuis-distance (cadr candidate) firstPoint lastPoint))
     (if (<= distanceValue 5.0)
-      (cond
-        ((or (not bestDistance) (< distanceValue (- bestDistance 0.01))) (setq best (car candidate) bestDistance distanceValue ambiguous nil))
-        ((and (<= (abs (- distanceValue bestDistance)) 0.01) (not (equal (car candidate) best))) (setq ambiguous T))
+      (progn
+        (setq angleValue (caddr candidate))
+        (setq scoreValue (+ distanceValue (if angleValue (* 5.0 (fmdb-mantelbuis-angle-difference lineAngle angleValue)) 2.0)))
+        (cond
+          ((or (not bestScore) (< scoreValue (- bestScore 0.05))) (setq best (car candidate) bestScore scoreValue ambiguous nil))
+          ((and (<= (abs (- scoreValue bestScore)) 0.05) (not (equal (car candidate) best))) (setq ambiguous T))
+        )
       )
     )
   )
@@ -582,7 +591,7 @@ ${buildProgressHelpersLisp(progressFilePath)}
       (if (member objectName '("TEXT" "MTEXT" "MULTILEADER")) (progn
         (setq text (if (= objectName "MULTILEADER") (cdr (assoc 304 entityData)) (cdr (assoc 1 entityData))))
         (setq material (fmdb-mantelbuis-material text) point (cdr (assoc 10 entityData)))
-        (if (and material point) (setq texts (cons (cons material point) texts)))
+        (if (and material point) (setq texts (cons (list material point (cdr (assoc 50 entityData))) texts)))
         (if (and point (fmdb-mantelbuis-boring-reference-p text)) (fmdb-mantelbuis-write "REFERENCE" text point point))
       ))
       (setq index (1+ index))
