@@ -2583,6 +2583,89 @@ function Test-FcRefreshKabeltypeSourceAllowed {
     return $false
 }
 
+function Test-FcRefreshDistributionCable {
+    param([object]$Row)
+
+    return (Normalize-UpperStatus $Row.Kabeltype) -like '96V*'
+}
+
+function Get-FcRefreshDistributionCableRouteKey {
+    param([object]$Row)
+
+    if (-not (Test-FcRefreshDistributionCable -Row $Row)) {
+        return $null
+    }
+
+    $locationA = Normalize-UpperStatus $Row.Locatienaam_A
+    $locationB = Normalize-UpperStatus $Row.Locatienaam_B
+    if ($null -eq $locationA -or $null -eq $locationB) {
+        return $null
+    }
+
+    return "$locationA|$locationB"
+}
+
+function Get-FcRefreshDistributionCableTopologyKey {
+    param([object]$Row)
+
+    $routeKey = Get-FcRefreshDistributionCableRouteKey -Row $Row
+    if ($null -eq $routeKey) {
+        return $null
+    }
+
+    return "$routeKey|$(Normalize-UpperStatus $Row.Afwerkeenheid_A)|$(Normalize-UpperStatus $Row.Afwerkeenheid_B)"
+}
+
+function Add-FcRefreshDistributionCableRowByRoute {
+    param(
+        [hashtable]$Lookup,
+        [object]$Row
+    )
+
+    $routeKey = Get-FcRefreshDistributionCableRouteKey -Row $Row
+    if ($null -eq $routeKey) {
+        return
+    }
+
+    if (-not $Lookup.ContainsKey($routeKey)) {
+        $Lookup[$routeKey] = [System.Collections.Generic.List[object]]::new()
+    }
+
+    $Lookup[$routeKey].Add($Row)
+}
+
+function Find-FcRefreshDistributionCableMatch {
+    param(
+        [object]$SourceRow,
+        [hashtable]$ExistingRowsByRoute
+    )
+
+    $routeKey = Get-FcRefreshDistributionCableRouteKey -Row $SourceRow
+    if ($null -eq $routeKey -or -not $ExistingRowsByRoute.ContainsKey($routeKey)) {
+        return $null
+    }
+
+    $candidates = @($ExistingRowsByRoute[$routeKey])
+    if ($candidates.Count -eq 1) {
+        return $candidates[0]
+    }
+
+    # Parallel 96V routes are only safe to remap when their terminations identify one segment.
+    $topologyKey = Get-FcRefreshDistributionCableTopologyKey -Row $SourceRow
+    if ($null -eq $topologyKey) {
+        return $null
+    }
+
+    $topologyMatches = @($candidates | Where-Object {
+        (Get-FcRefreshDistributionCableTopologyKey -Row $_) -eq $topologyKey
+    })
+    if ($topologyMatches.Count -eq 1) {
+        return $topologyMatches[0]
+    }
+
+    return $null
+}
+
 function Merge-FcRefreshRow {
     param(
         [string]$TableName,
@@ -2716,11 +2799,14 @@ function Apply-FcRefresh {
     }
 
     $existingCablesByKey = @{}
+    $existingDistributionCablesByRoute = @{}
     foreach ($row in $existingCableRows) {
         $key = Get-ConnectionSyncKey -TableName 'Kabel' -Row $row
         if ($null -ne $key) {
             $existingCablesByKey[$key] = $row
         }
+
+        Add-FcRefreshDistributionCableRowByRoute -Lookup $existingDistributionCablesByRoute -Row $row
     }
 
     $targetCustomerRows = @()
@@ -2823,7 +2909,14 @@ function Apply-FcRefresh {
     foreach ($sourceRow in $sourceCableRows) {
         $key = Get-ConnectionSyncKey -TableName 'Kabel' -Row $sourceRow
         $existingRow = if ($null -ne $key -and $existingCablesByKey.ContainsKey($key)) { $existingCablesByKey[$key] } else { $null }
+        if ($null -eq $existingRow) {
+            $existingRow = Find-FcRefreshDistributionCableMatch -SourceRow $sourceRow -ExistingRowsByRoute $existingDistributionCablesByRoute
+        }
         $mergedRow = Merge-FcRefreshRow -TableName 'Kabel' -SourceRow $sourceRow -ExistingRow $existingRow
+        if ($null -ne $existingRow -and (Test-FcRefreshDistributionCable -Row $sourceRow)) {
+            # Labels of existing 96V distribution cables are referenced by LAS/Duct/AfwerkODF.
+            $mergedRow.Label = $existingRow.Label
+        }
         $label = Normalize-Text $mergedRow.Label
         if ($null -ne $existingRow) {
             $isDuctCable = $null -ne $label -and $ductCableLookup.ContainsKey($label.ToUpperInvariant())
