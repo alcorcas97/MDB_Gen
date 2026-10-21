@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('ExportCustomerDrawData', 'ImportCustomerCoordinates', 'ExportDpCoordinateTargets', 'ImportDpCoordinates', 'MoveResvCoordinatesToDp', 'SetOapCoordinate', 'UppercaseOap', 'ExportCrossCheckData', 'NormalizeCustomerFiber1', 'FixCustomerDempingValues', 'ApplyDempingContingency', 'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh', 'ApplyGlaspoortProject', 'InspectConnectionBalance', 'ApplyConnectionSync', 'ExportRiserState', 'ApplyRiserData', 'AddRiserData', 'DeleteRiserData', 'ApplyBuiseind', 'ExportPartialDeliveryData', 'ApplyPartialDelivery')]
+    [ValidateSet('ExportCustomerDrawData', 'ImportCustomerCoordinates', 'ExportDpCoordinateTargets', 'ImportDpCoordinates', 'MoveResvCoordinatesToDp', 'SetOapCoordinate', 'UppercaseOap', 'ExportCrossCheckData', 'NormalizeCustomerFiber1', 'FixCustomerDempingValues', 'ApplyDempingContingency', 'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh', 'ApplyGlaspoortProject', 'InspectConnectionBalance', 'ApplyConnectionSync', 'ExportRiserState', 'ApplyRiserData', 'AddRiserData', 'DeleteRiserData', 'ApplyBuiseind', 'ApplyMantelbuis', 'ExportPartialDeliveryData', 'ApplyPartialDelivery')]
     [string]$Mode,
 
     [Parameter(Mandatory = $true)]
@@ -2175,6 +2175,59 @@ function Apply-Buiseind {
     }
 }
 
+function Get-MantelbuisGeometryKey {
+    param([object]$Row)
+
+    $material = Normalize-Text $Row.Soort_Materie
+    $values = @($Row.X_A, $Row.Y_A, $Row.X_B, $Row.Y_B | ForEach-Object { Convert-ToNullableDouble $_ })
+    if ($null -eq $material -or @($values | Where-Object { $null -eq $_ }).Count -gt 0) { return $null }
+    $forward = '{0}|{1}|{2}|{3}' -f [math]::Round($values[0] * 1000), [math]::Round($values[1] * 1000), [math]::Round($values[2] * 1000), [math]::Round($values[3] * 1000)
+    $reverse = '{0}|{1}|{2}|{3}' -f [math]::Round($values[2] * 1000), [math]::Round($values[3] * 1000), [math]::Round($values[0] * 1000), [math]::Round($values[1] * 1000)
+    return '{0}|{1}' -f $material.ToUpperInvariant(), $(if ([string]::CompareOrdinal($forward, $reverse) -le 0) { $forward } else { $reverse })
+}
+
+function Apply-Mantelbuis {
+    param(
+        [__ComObject]$Database,
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) { throw "No se ha encontrado el fichero temporal de Mantelbuis: $Path" }
+    $payload = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $incoming = if ($payload.PSObject.Properties.Name -contains 'rows') { @($payload.rows) } else { @() }
+    if ($incoming.Count -eq 0) { return [pscustomobject]@{ insertedCount = 0; skippedCount = 0; totalCount = @(Get-TableRows -Database $Database -TableName 'Mantelbuis').Count } }
+
+    $seen = @{}
+    $survivors = @()
+    $existing = @(Get-TableRows -Database $Database -TableName 'Mantelbuis' | Sort-Object ID)
+    foreach ($row in $existing) {
+        $key = Get-MantelbuisGeometryKey $row
+        if ($null -eq $key -or -not $seen.ContainsKey($key)) {
+            if ($null -ne $key) { $seen[$key] = $true }
+            $survivors += $row
+        }
+    }
+
+    $inserted = 0; $skipped = 0
+    foreach ($row in $incoming) {
+        $key = Get-MantelbuisGeometryKey $row
+        if ($null -eq $key) { throw 'Una fila de Mantelbuis no tiene coordenadas/material validos.' }
+        if ($seen.ContainsKey($key)) { $skipped++; continue }
+        $seen[$key] = $true
+        $survivors += [pscustomobject][ordered]@{
+            X_A = [double]$row.X_A; Y_A = [double]$row.Y_A; X_B = [double]$row.X_B; Y_B = [double]$row.Y_B
+            Boring_Type = 'Mantelbuis'; Soort_Materie = Normalize-Text $row.Soort_Materie; Boorprofiel = ''; ImportResult = ''
+        }
+        $inserted++
+    }
+
+    Clear-AccessTables -Database $Database -TableNames @('Mantelbuis')
+    Write-AccessTable -Database $Database -TableName 'Mantelbuis' -Rows $survivors
+    $idCheck = Test-ContiguousTableIds -Database $Database -TableName 'Mantelbuis'
+    if (-not $idCheck.contiguousFromOne) { throw 'Los IDs de Mantelbuis no quedaron consecutivos desde 1.' }
+    return [pscustomobject]@{ insertedCount = $inserted; skippedCount = $skipped; totalCount = $survivors.Count; idCheck = $idCheck }
+}
+
 function Get-TableRows {
     param(
         [__ComObject]$Database,
@@ -3560,7 +3613,7 @@ $compactAfterClose = (
         'SetOapCoordinate', 'UppercaseOap', 'NormalizeCustomerFiber1', 'FixCustomerDempingValues', 'ApplyDempingContingency',
         'RebuildCustomerComplexes', 'ApplyFcUpdates', 'ApplyFcRefresh',
         'ApplyGlaspoortProject', 'ApplyConnectionSync', 'ApplyRiserData',
-        'AddRiserData', 'DeleteRiserData', 'ApplyBuiseind', 'ApplyPartialDelivery'
+        'AddRiserData', 'DeleteRiserData', 'ApplyBuiseind', 'ApplyMantelbuis', 'ApplyPartialDelivery'
     )
 )
 
@@ -3683,6 +3736,11 @@ try {
 
         'ApplyBuiseind' {
             Apply-Buiseind -Database $context.Database -Path $AssignmentsPath | ConvertTo-Json -Depth 6
+            break
+        }
+
+        'ApplyMantelbuis' {
+            Apply-Mantelbuis -Database $context.Database -Path $AssignmentsPath | ConvertTo-Json -Depth 6
             break
         }
     }

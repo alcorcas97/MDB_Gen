@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('fiberApp', {
   addRiserData: (payload) => ipcRenderer.invoke('mdb:add-riser-data', payload),
   deleteRiserData: (payload) => ipcRenderer.invoke('mdb:delete-riser-data', payload),
   createBuiseind: (payload) => ipcRenderer.invoke('mdb:create-buiseind', payload),
+  createMantelbuis: (payload) => ipcRenderer.invoke('dwg:create-mantelbuis', payload),
   applyGlaspoortProject: (payload) => ipcRenderer.invoke('mdb:apply-glaspoort-project', payload),
   rebuildCustomerComplexes: (payload) => ipcRenderer.invoke('mdb:rebuild-customer-complexes', payload),
   drawCustomerCoordinates: (payload) => ipcRenderer.invoke('dwg:draw-customers', payload),

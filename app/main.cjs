@@ -156,6 +156,7 @@ const MDB_HISTORY_LABELS = {
   AddRiserData: 'Añadir ET al riser',
   DeleteRiserData: 'Eliminar riser',
   ApplyBuiseind: 'Crear Buiseind',
+  ApplyMantelbuis: 'Crear Mantelbuis',
   ApplyPartialDelivery: 'Partial Delivery'
 };
 
@@ -3551,6 +3552,34 @@ ipcMain.handle('mdb:create-buiseind', async (_event, payload) => {
   finally {
     await fsp.rm(assignmentsPath, { force: true }).catch(() => {});
   }
+});
+
+ipcMain.handle('dwg:create-mantelbuis', async (_event, payload) => {
+  if (activeRun) throw new Error('Ya hay una operacion en curso.');
+  validateProjectAndMdbInput(payload);
+  const workingMdbPath = await resolveProjectWorkingMdbPath(payload.projectFolderPath);
+  const backup = await backupPrimaryDwg(payload.projectFolderPath, 'Crear Mantelbuis', [workingMdbPath]);
+  const assignmentsPath = path.join(os.tmpdir(), `fiber-mantelbuis-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
+  try {
+    const { createMantelbuis } = getDwgToolsModule();
+    const result = await createMantelbuis(payload.projectFolderPath, {
+      onStage: (stage) => {
+        if (String(stage).toLowerCase() === 'select') sendGenerationEvent({ type: 'status', message: 'Seleccione en AutoCAD el material y las MLINE de cada grupo.' });
+      }
+    });
+    if (result.rows.length === 0) {
+      if (backup) await updateOperationBackup({ projectPath: payload.projectFolderPath, entryId: backup.id, status: 'cancelled', summary: { convertedCount: result.convertedCount } });
+      return { ...result, mdbPath: workingMdbPath, insertedCount: 0, skippedCount: 0 };
+    }
+
+    await fsp.writeFile(assignmentsPath, JSON.stringify({ rows: result.rows }), 'utf8');
+    const applied = await runMdbToolsJson(['-Mode', 'ApplyMantelbuis', '-MdbPath', workingMdbPath, '-AssignmentsPath', assignmentsPath], { skipHistory: true });
+    if (backup) await updateOperationBackup({ projectPath: payload.projectFolderPath, entryId: backup.id, status: 'completed', summary: { ...summarizeOperationResult(applied), convertedCount: result.convertedCount } });
+    return { ...result, ...applied, mdbPath: workingMdbPath };
+  } catch (error) {
+    if (backup) await updateOperationBackup({ projectPath: payload.projectFolderPath, entryId: backup.id, status: 'failed', summary: { error: String(error?.message ?? error) } }).catch(() => {});
+    throw error;
+  } finally { await fsp.rm(assignmentsPath, { force: true }).catch(() => {}); }
 });
 
 ipcMain.handle('mdb:apply-glaspoort-project', async (_event, payload) => {

@@ -28,6 +28,7 @@ const EXPORT_BORING_REFERENCES_COMMAND_NAME = 'FIBER_EXPORT_BORING_REFERENCES';
 const APPLY_BORING_RENAMES_COMMAND_NAME = 'FIBER_APPLY_BORING_RENAMES';
 const EXTRACT_PHKT_PLACEMENT_COMMAND_NAME = 'FIBER_EXTRACT_PHKT_PLACEMENT';
 const REVIEW_PHKT_PLACEMENT_COMMAND_NAME = 'FIBER_REVIEW_PHKT_PLACEMENT';
+const CREATE_MANTELBUIS_COMMAND_NAME = 'FIBER_CREATE_MANTELBUIS';
 const EXTRA_ROLE_BLOCK_NAME = 'ROL';
 const EXTRA_ROLE_CHECK_CODE = 'M-30173';
 const EXTRA_ROLE_TOLERANCE = 1;
@@ -434,6 +435,105 @@ function buildProgressHelpersLisp(progressFilePath) {
   (fmdb-append-progress-line (strcat "FMDB_DONE:" stage))
 )
 `;
+}
+
+function buildCreateMantelbuisLisp({ outputFilePath, progressFilePath }) {
+  return `(setq fmdb-output-file "${escapeLispString(toAutoLispPath(outputFilePath))}")
+${buildProgressHelpersLisp(progressFilePath)}
+(vl-load-com)
+(defun fmdb-mantelbuis-write (material firstPoint lastPoint / handle)
+  (setq handle (open fmdb-output-file "a"))
+  (if handle (progn (write-line (strcat material "\t" (rtos (car firstPoint) 2 8) "\t" (rtos (cadr firstPoint) 2 8) "\t" (rtos (car lastPoint) 2 8) "\t" (rtos (cadr lastPoint) 2 8)) handle) (close handle) T) nil)
+)
+(defun fmdb-mantelbuis-points (object / raw values points)
+  (setq raw (vl-catch-all-apply 'vlax-get (list object 'Coordinates)))
+  (if (vl-catch-all-error-p raw) nil (progn
+    (setq values (vlax-safearray->list (vlax-variant-value raw)) points nil)
+    (while values (setq points (append points (list (list (car values) (cadr values) (caddr values)))) values (cdddr values)))
+    points
+  ))
+)
+(defun fmdb-mantelbuis-convert (entity material / object points firstPoint lastPoint newEntity)
+  (setq object (vlax-ename->vla-object entity) points (fmdb-mantelbuis-points object))
+  (if (and points (> (length points) 1)) (progn
+    (setq newEntity (entmakex (append (list '(0 . "LWPOLYLINE") (cons 8 material) (cons 90 (length points)) (cons 70 0)) (mapcar '(lambda (point) (cons 10 (list (car point) (cadr point)))) points))))
+    (if newEntity (progn
+      (entdel entity) (setq firstPoint (car points) lastPoint (car (reverse points))) (fmdb-mantelbuis-write material firstPoint lastPoint) T
+    ) nil)
+  ) nil)
+)
+(defun c:${CREATE_MANTELBUIS_COMMAND_NAME} (/ oldError oldOsMode oldClayer oldFileDia oldCmdEcho selection textEntity textData material mlines index converted continue)
+  (setq oldError *error* oldOsMode (getvar "OSMODE") oldClayer (getvar "CLAYER") oldFileDia (getvar "FILEDIA") oldCmdEcho (getvar "CMDECHO") converted 0 continue T)
+  (defun *error* (message)
+    (setvar "OSMODE" oldOsMode) (setvar "CLAYER" oldClayer) (setvar "FILEDIA" oldFileDia) (setvar "CMDECHO" oldCmdEcho)
+    (if (and message (not (wcmatch (strcase message) "*CANCEL*,*EXIT*,*BREAK*"))) (fmdb-report-result "ERROR" message))
+    (fmdb-report-result "CONVERTED" (itoa converted)) (fmdb-report-done "MANTELBUIS") (setq *error* oldError) (princ)
+  )
+  (setq textEntity (open fmdb-output-file "w"))
+  (if textEntity (close textEntity) (progn (fmdb-report-result "ERROR" "No se puede abrir el fichero de salida.") (setq continue nil)))
+  (setvar "CMDECHO" 0) (fmdb-report-stage "select")
+  (while continue
+    (setq selection (entsel "\\nSeleccione TEXT/MTEXT con el material (Enter para terminar): "))
+    (if (not selection) (setq continue nil) (progn
+      (setq textEntity (car selection) textData (entget textEntity))
+      (if (not (member (cdr (assoc 0 textData)) '("TEXT" "MTEXT")))
+        (prompt "\\nDebe seleccionar un TEXT o MTEXT.")
+        (progn
+          (setq material (vl-string-trim " " (vla-get-TextString (vlax-ename->vla-object textEntity))))
+          (if (not (snvalid material))
+            (prompt (strcat "\\nLayer/material invalido: " material))
+            (progn
+              (if (not (tblsearch "LAYER" material)) (command "_.-LAYER" "_Make" material ""))
+              (prompt (strcat "\\nSeleccione una o varias MLINE para " material " (Enter para terminar): "))
+              (setq mlines (ssget '((0 . "MLINE"))))
+              (if mlines (progn (setq index 0) (repeat (sslength mlines) (if (fmdb-mantelbuis-convert (ssname mlines index) material) (setq converted (1+ converted))) (setq index (1+ index)))))
+            )
+          )
+        )
+      )
+    ))
+  )
+  (setvar "OSMODE" oldOsMode) (setvar "CLAYER" oldClayer) (setvar "FILEDIA" oldFileDia) (setvar "CMDECHO" oldCmdEcho)
+  (fmdb-report-result "CONVERTED" (itoa converted)) (fmdb-report-done "MANTELBUIS") (setq *error* oldError) (princ)
+)
+`;
+}
+
+function parseMantelbuisRows(text) {
+  const rows = [];
+  const seen = new Set();
+  for (const line of String(text ?? '').replace(/\r/g, '').split('\n')) {
+    const [material, xA, yA, xB, yB] = line.split('\t');
+    const values = [xA, yA, xB, yB].map(Number);
+    const normalizedMaterial = normalizeText(material);
+    if (!normalizedMaterial || values.some((value) => !Number.isFinite(value))) continue;
+    const forward = `${Math.round(values[0] * 1000)}|${Math.round(values[1] * 1000)}|${Math.round(values[2] * 1000)}|${Math.round(values[3] * 1000)}`;
+    const reverse = `${Math.round(values[2] * 1000)}|${Math.round(values[3] * 1000)}|${Math.round(values[0] * 1000)}|${Math.round(values[1] * 1000)}`;
+    const key = `${normalizedMaterial.toUpperCase()}|${forward < reverse ? forward : reverse}`;
+    if (!seen.has(key)) { seen.add(key); rows.push({ X_A: values[0], Y_A: values[1], X_B: values[2], Y_B: values[3], Soort_Materie: normalizedMaterial, Boring_Type: 'Mantelbuis', Boorprofiel: '', ImportResult: '' }); }
+  }
+  return rows;
+}
+
+async function createMantelbuis(projectFolderPath, options = {}) {
+  const dwgPath = await getFirstDwgPath(projectFolderPath);
+  if (!dwgPath) throw new Error('No se ha encontrado un DWG en la carpeta del proyecto.');
+  const token = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const lispFilePath = path.join(os.tmpdir(), `fiber-mantelbuis-${token}.lsp`);
+  const outputFilePath = path.join(os.tmpdir(), `fiber-mantelbuis-${token}.tsv`);
+  const progressFilePath = path.join(os.tmpdir(), `fiber-mantelbuis-${token}.progress`);
+  try {
+    await fsp.writeFile(lispFilePath, buildCreateMantelbuisLisp({ outputFilePath, progressFilePath }), 'utf8');
+    const monitor = startProgressMonitor(progressFilePath, { onStage: options.onStage, onResult: options.onResult });
+    let run; try { run = await tryRunCommandOnOpenDocument({ dwgPath, lispFilePath, commandName: CREATE_MANTELBUIS_COMMAND_NAME, progressFilePath, outputFilePath, timeoutMs: options.timeoutMs ?? (4 * 60 * 60 * 1000), saveDocument: true }); } finally { await monitor.stop(); }
+    if (!run?.handled) throw new Error('Abra el DWG del proyecto en AutoCAD antes de crear Mantelbuis. Esta herramienta necesita el documento abierto.');
+    const progress = await fsp.readFile(progressFilePath, 'utf8').catch(() => '');
+    const error = progress.match(/FMDB_RESULT:ERROR=([^\r\n]+)/i)?.[1];
+    if (error) throw new Error(`AutoCAD no ha podido crear Mantelbuis: ${error}`);
+    if (!/FMDB_DONE:MANTELBUIS/i.test(progress)) throw new Error('AutoCAD no ha finalizado correctamente Crear Mantelbuis.');
+    const rows = parseMantelbuisRows(await fsp.readFile(outputFilePath, 'utf8').catch(() => ''));
+    return { dwgPath, convertedCount: Number(progress.match(/FMDB_RESULT:CONVERTED=(\d+)/i)?.[1] ?? 0), rows, cancelled: rows.length === 0 };
+  } finally { await Promise.all([lispFilePath, outputFilePath, progressFilePath].map((target) => removeFileIfExists(target))); }
 }
 
 function getAccoreConsolePriority(version) {
@@ -3159,12 +3259,15 @@ module.exports = {
   _internal: {
     buildCrossingDpGroups,
     buildCrossingDpLisp,
+    buildCreateMantelbuisLisp,
+    parseMantelbuisRows,
     parseRoutingProblemLabelsFromCheckHtml
   },
   clearCrossingDpInDwg,
   drawAccessnetWithoutAddressFromCheck,
   drawCrossingDpToDwg,
   clearCustomerCoordinatesInDwg,
+  createMantelbuis,
   createGestuurdeBoringen,
   drawCustomerCoordinatesToDwg,
   extractCustomerTextCoordinates,

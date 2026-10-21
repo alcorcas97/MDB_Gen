@@ -19,6 +19,7 @@ const elements = {
   updateFcButton: document.getElementById('updateFcButton'),
   riserButton: document.getElementById('riserButton'),
   createBuiseindButton: document.getElementById('createBuiseindButton'),
+  createMantelbuisButton: document.getElementById('createMantelbuisButton'),
   glaspoortProjectButton: document.getElementById('glaspoortProjectButton'),
   rebuildCustomerComplexesButton: document.getElementById('rebuildCustomerComplexesButton'),
   drawCustomerCoordinatesButton: document.getElementById('drawCustomerCoordinatesButton'),
@@ -154,6 +155,7 @@ function setRunningState(running, cancelAvailable = false) {
     elements.updateFcButton,
     elements.riserButton,
     elements.createBuiseindButton,
+    elements.createMantelbuisButton,
     elements.glaspoortProjectButton,
     elements.rebuildCustomerComplexesButton,
     elements.drawCustomerCoordinatesButton,
@@ -1364,6 +1366,15 @@ async function createBuiseind() {
   }
 }
 
+async function createMantelbuis() {
+  await runProjectTool({
+    startMessage: 'Preparando Crear Mantelbuis; abra el DWG y seleccione material y MLINE en AutoCAD...',
+    successMessage: (result) => result.cancelled ? 'No se seleccionaron MLINE; la MDB no se ha modificado.' : `Mantelbuis creado: ${result.insertedCount} filas nuevas (${result.skippedCount} duplicadas).`,
+    successLog: (result) => result.cancelled ? 'Crear Mantelbuis cancelado sin cambios en la MDB.' : `Mantelbuis: ${result.convertedCount} MLINE convertidas; ${result.insertedCount} filas insertadas; ${result.skippedCount} duplicadas conservadas.`,
+    action: (payload) => fiberDesktopApi.createMantelbuis(payload)
+  });
+}
+
 async function clearCustomerCoordinates() {
   await runProjectTool({
     startMessage: 'Preparando limpieza de coordenadas de clientes...',
@@ -1576,6 +1587,10 @@ elements.partialDeliveryButton.addEventListener('click', () => {
 
 elements.createBuiseindButton.addEventListener('click', () => {
   void createBuiseind();
+});
+
+elements.createMantelbuisButton.addEventListener('click', () => {
+  void createMantelbuis();
 });
 
 elements.glaspoortProjectButton.addEventListener('click', () => {
