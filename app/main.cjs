@@ -4488,6 +4488,62 @@ ipcMain.handle('dwg:remove-extra-roles', async (_event, payload) => {
   };
 });
 
+ipcMain.handle('dwg:add-missing-roles', async (_event, payload) => {
+  if (activeRun) {
+    throw new Error('Ya hay una operacion en curso.');
+  }
+
+  validateProjectAndMdbInput(payload);
+  sendGenerationEvent({
+    type: 'status',
+    message: 'Buscando Checks.htm y leyendo errores M-30140...'
+  });
+
+  const dwgBackup = await backupPrimaryDwg(payload.projectFolderPath, 'Añadir ROL faltantes');
+  const { addMissingRolesFromCheck } = getDwgToolsModule();
+  const result = await addMissingRolesFromCheck(payload.projectFolderPath, {
+    onStage: (stage) => {
+      const messages = {
+        locate: 'Buscando el fichero Checks.htm del proyecto...',
+        parse: 'Extrayendo coordenadas GV del error M-30140...',
+        validate: 'Comprobando la definición del bloque ROL...',
+        insert: 'Orientando e insertando ROL según los extremos de AccessNet...',
+        audit: 'Ejecutando audit en el DWG...'
+      };
+      const message = messages[String(stage ?? '').toLowerCase()];
+      if (message) sendGenerationEvent({ type: 'status', message });
+    }
+  });
+
+  if (dwgBackup) {
+    await updateOperationBackup({
+      projectPath: payload.projectFolderPath,
+      entryId: dwgBackup.id,
+      status: 'completed',
+      summary: summarizeOperationResult(result)
+    });
+  }
+
+  if (result.usedOpenDocument) {
+    sendGenerationEvent({
+      type: 'log',
+      level: 'info',
+      message: 'DWG abierto detectado en AutoCAD. Los ROL se han insertado sobre el documento abierto.\n'
+    });
+  }
+
+  sendGenerationEvent({
+    type: 'log',
+    level: 'info',
+    message: `M-30140: ${result.sourceRowCount} filas; ${result.coordinateCount} coordenadas GV unicas; ${result.ignoredZeroCount} coordenadas (0,0) ignoradas. ROL insertados: ${result.insertedCount}; ya existentes: ${result.existingCount}; sin extremo AccessNet fiable: ${result.noAccessnetCount}.\n`
+  });
+  sendGenerationEvent({
+    type: 'status',
+    message: 'Contingencia de ROL faltantes aplicada correctamente.'
+  });
+  return result;
+});
+
 ipcMain.handle('dwg:draw-accessnet-without-address', async (_event, payload) => {
   if (activeRun) {
     throw new Error('Ya hay una operacion en curso.');

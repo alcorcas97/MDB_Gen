@@ -30,6 +30,7 @@ const elements = {
   checkCrossingDpButton: document.getElementById('checkCrossingDpButton'),
   clearCrossingDpButton: document.getElementById('clearCrossingDpButton'),
   removeExtraRolesButton: document.getElementById('removeExtraRolesButton'),
+  addMissingRolesButton: document.getElementById('addMissingRolesButton'),
   drawAccessnetWithoutAddressButton: document.getElementById('drawAccessnetWithoutAddressButton'),
   applyDempingContingencyButton: document.getElementById('applyDempingContingencyButton'),
   createGestuurdeBoringenButton: document.getElementById('createGestuurdeBoringenButton'),
@@ -169,6 +170,7 @@ function setRunningState(running, cancelAvailable = false) {
     elements.placePhktTextsButton,
     elements.placeRoutingPhktFromCheckButton,
     elements.removeExtraRolesButton,
+    elements.addMissingRolesButton,
     elements.drawAccessnetWithoutAddressButton,
     elements.applyDempingContingencyButton,
     elements.getOapCoordinateButton,
@@ -1447,6 +1449,15 @@ async function removeExtraRoles() {
   });
 }
 
+async function addMissingRoles() {
+  await runProjectTool({
+    startMessage: 'Buscando errores M-30140 e insertando bloques ROL orientados con AccessNet...',
+    successMessage: (result) => `Contingencia aplicada: ${result.insertedCount} ROL añadidos; ${result.existingCount} ya estaban colocados.`,
+    successLog: (result) => `ROL faltantes completado usando ${result.checkPath}. Filas del check: ${result.sourceRowCount}. Coordenadas GV unicas: ${result.coordinateCount}. Insertados: ${result.insertedCount}. Ya existentes: ${result.existingCount}. Sin extremo AccessNet fiable: ${result.noAccessnetCount}. Coordenadas (0,0) ignoradas: ${result.ignoredZeroCount}.`,
+    action: (payload) => fiberDesktopApi.addMissingRoles(payload)
+  });
+}
+
 async function drawAccessnetWithoutAddress() {
   await runProjectTool({
     startMessage: 'Buscando errores M-30001 en el check y dibujando circulos rojos...',
@@ -1643,6 +1654,10 @@ elements.placeRoutingPhktFromCheckButton.addEventListener('click', () => {
 
 elements.removeExtraRolesButton.addEventListener('click', () => {
   void removeExtraRoles();
+});
+
+elements.addMissingRolesButton.addEventListener('click', () => {
+  void addMissingRoles();
 });
 
 elements.drawAccessnetWithoutAddressButton.addEventListener('click', () => {

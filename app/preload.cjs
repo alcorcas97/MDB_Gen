@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('fiberApp', {
   drawCrossingDp: (payload) => ipcRenderer.invoke('dwg:draw-crossing-dp', payload),
   clearCrossingDp: (payload) => ipcRenderer.invoke('dwg:clear-crossing-dp', payload),
   removeExtraRoles: (payload) => ipcRenderer.invoke('dwg:remove-extra-roles', payload),
+  addMissingRoles: (payload) => ipcRenderer.invoke('dwg:add-missing-roles', payload),
   drawAccessnetWithoutAddress: (payload) => ipcRenderer.invoke('dwg:draw-accessnet-without-address', payload),
   applyDempingContingency: (payload) => ipcRenderer.invoke('mdb:apply-demping-contingency', payload),
   createGestuurdeBoringen: (payload) => ipcRenderer.invoke('dwg:create-gestuurde-boringen', payload),

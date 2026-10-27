@@ -24,6 +24,7 @@ const DRAW_COMMAND_NAME = 'FIBER_DRAW_CUSTOMERS';
 const EXPORT_COMMAND_NAME = 'FIBER_EXPORT_CUSTOMER_COORDS';
 const CLEAN_COMMAND_NAME = 'FIBER_CLEAR_CUSTOMER_COORDS';
 const REMOVE_EXTRA_ROLES_COMMAND_NAME = 'FIBER_REMOVE_EXTRA_ROLES';
+const ADD_MISSING_ROLES_COMMAND_NAME = 'FIBER_ADD_MISSING_ROLES';
 const DRAW_ACCESSNET_WITHOUT_ADDRESS_COMMAND_NAME = 'FIBER_DRAW_ACCESSNET_WITHOUT_ADDRESS';
 const EXPORT_BORING_REFERENCES_COMMAND_NAME = 'FIBER_EXPORT_BORING_REFERENCES';
 const APPLY_BORING_RENAMES_COMMAND_NAME = 'FIBER_APPLY_BORING_RENAMES';
@@ -33,6 +34,10 @@ const CREATE_MANTELBUIS_COMMAND_NAME = 'FIBER_CREATE_MANTELBUIS';
 const EXTRA_ROLE_BLOCK_NAME = 'ROL';
 const EXTRA_ROLE_CHECK_CODE = 'M-30173';
 const EXTRA_ROLE_TOLERANCE = 1;
+const MISSING_ROLE_CHECK_CODE = 'M-30140';
+const MISSING_ROLE_TOLERANCE = 0.05;
+const ACCESSNET_LAYER_NAME = 'AccessNet';
+const ROLE_LAYER_NAME = 'Opmerking';
 const ACCESSNET_WITHOUT_ADDRESS_CHECK_CODE = 'M-30001';
 const ACCESSNET_MARK_LAYER_NAME = 'FMDB_ACCESSNET_NO_ADDRESS';
 const ACCESSNET_MARK_COLOR = 1;
@@ -1530,6 +1535,161 @@ ${buildProgressHelpersLisp(progressFilePath)}
 `;
 }
 
+function buildAddMissingRolesLisp({ coordinates, progressFilePath, tolerance = MISSING_ROLE_TOLERANCE }) {
+  return `(vl-load-com)
+(setq fmdb-role-targets '${buildRoleCoordinateLispData(coordinates)})
+(setq fmdb-role-name "${escapeLispString(EXTRA_ROLE_BLOCK_NAME)}")
+(setq fmdb-role-layer "${escapeLispString(ROLE_LAYER_NAME)}")
+(setq fmdb-accessnet-layer "${escapeLispString(ACCESSNET_LAYER_NAME)}")
+(setq fmdb-role-tolerance ${Number(tolerance) || MISSING_ROLE_TOLERANCE})
+${buildProgressHelpersLisp(progressFilePath)}
+
+(defun fmdb-role-distance-2d (left right)
+  (distance (list (car left) (cadr left)) (list (car right) (cadr right)))
+)
+
+(defun fmdb-role-exists-at-point (target / selection index entity data blockName point found)
+  (setq found nil)
+  (if (setq selection (ssget "_X" '((0 . "INSERT"))))
+    (progn
+      (setq index 0)
+      (while (and (< index (sslength selection)) (not found))
+        (setq entity (ssname selection index))
+        (setq data (entget entity))
+        (setq blockName (cdr (assoc 2 data)))
+        (setq point (cdr (assoc 10 data)))
+        (if (and blockName point
+                 (= (strcase blockName) (strcase fmdb-role-name))
+                 (<= (fmdb-role-distance-2d point target) fmdb-role-tolerance))
+          (setq found T)
+        )
+        (setq index (1+ index))
+      )
+    )
+  )
+  found
+)
+
+(defun fmdb-lwpolyline-vertices (entity / data vertices pair)
+  (setq data (entget entity))
+  (setq vertices nil)
+  (foreach pair data
+    (if (= (car pair) 10)
+      (setq vertices (append vertices (list (cdr pair))))
+    )
+  )
+  vertices
+)
+
+(defun fmdb-accessnet-direction-at-target (target / selection index entity vertices vertexIndex vertex previousPoint nextPoint neighbor previousLength nextLength vertexDistance bestDistance bestAngle)
+  (setq bestDistance nil)
+  (setq bestAngle nil)
+  (if (setq selection (ssget "_X" (list '(0 . "LWPOLYLINE") (cons 8 fmdb-accessnet-layer))))
+    (progn
+      (setq index 0)
+      (repeat (sslength selection)
+        (setq entity (ssname selection index))
+        (setq vertices (fmdb-lwpolyline-vertices entity))
+        (setq vertexIndex 0)
+        (foreach vertex vertices
+          (setq vertexDistance (fmdb-role-distance-2d target vertex))
+          (if (and (<= vertexDistance fmdb-role-tolerance)
+                   (or (not bestDistance) (< vertexDistance bestDistance)))
+            (progn
+              (setq previousPoint (if (> vertexIndex 0) (nth (1- vertexIndex) vertices) nil))
+              (setq nextPoint (if (< vertexIndex (1- (length vertices))) (nth (1+ vertexIndex) vertices) nil))
+              (setq previousLength (if previousPoint (fmdb-role-distance-2d vertex previousPoint) -1.0))
+              (setq nextLength (if nextPoint (fmdb-role-distance-2d vertex nextPoint) -1.0))
+              ;; A short tail often points to an old misplaced ROL. Follow the longer segment into AccessNet.
+              (setq neighbor (if (> previousLength nextLength) previousPoint nextPoint))
+              (if neighbor
+                (progn
+                  (setq bestDistance vertexDistance)
+                  (setq bestAngle (atan (- (cadr neighbor) (cadr vertex)) (- (car neighbor) (car vertex))))
+                )
+              )
+            )
+          )
+          (setq vertexIndex (1+ vertexIndex))
+        )
+        (setq index (1+ index))
+      )
+    )
+  )
+  (if (and bestDistance bestAngle (<= bestDistance fmdb-role-tolerance))
+    bestAngle
+    nil
+  )
+)
+
+(defun fmdb-ensure-role-layer ()
+  (if (not (tblsearch "LAYER" fmdb-role-layer))
+    (entmakex
+      (list
+        '(0 . "LAYER")
+        '(100 . "AcDbSymbolTableRecord")
+        '(100 . "AcDbLayerTableRecord")
+        (cons 2 fmdb-role-layer)
+        '(70 . 0)
+        '(62 . 30)
+        '(6 . "Continuous")
+      )
+    )
+  )
+)
+
+(defun c:FIBER_ADD_MISSING_ROLES (/ target direction insertedCount existingCount noAccessnetCount)
+  (fmdb-report-stage "validate")
+  (if (not (tblsearch "BLOCK" fmdb-role-name))
+    (progn
+      (fmdb-report-result "ERROR" "BLOCK_NOT_FOUND")
+      (fmdb-report-done "ADD_MISSING_ROLES")
+    )
+    (progn
+      (fmdb-ensure-role-layer)
+      (fmdb-report-stage "insert")
+      (setq insertedCount 0)
+      (setq existingCount 0)
+      (setq noAccessnetCount 0)
+      (foreach target fmdb-role-targets
+        (if (fmdb-role-exists-at-point target)
+          (setq existingCount (1+ existingCount))
+          (progn
+            (setq direction (fmdb-accessnet-direction-at-target target))
+            (if direction
+              (if (entmakex
+                    (list
+                      '(0 . "INSERT")
+                      (cons 2 fmdb-role-name)
+                      (cons 8 fmdb-role-layer)
+                      (cons 10 (list (car target) (cadr target) 0.0))
+                      '(41 . 1.0)
+                      '(42 . 1.0)
+                      '(43 . 1.0)
+                      (cons 50 (+ direction (/ pi 2.0)))
+                    )
+                  )
+                (setq insertedCount (1+ insertedCount))
+                (setq noAccessnetCount (1+ noAccessnetCount))
+              )
+              (setq noAccessnetCount (1+ noAccessnetCount))
+            )
+          )
+        )
+      )
+      (fmdb-report-result "INSERTED" (itoa insertedCount))
+      (fmdb-report-result "EXISTING" (itoa existingCount))
+      (fmdb-report-result "NO_ACCESSNET" (itoa noAccessnetCount))
+      (fmdb-report-stage "audit")
+      (command "_.AUDIT" "_Y")
+      (fmdb-report-done "ADD_MISSING_ROLES")
+    )
+  )
+  (princ)
+)
+`;
+}
+
 function buildDrawAccessnetWithoutAddressLisp({ coordinates, progressFilePath, radius = ACCESSNET_MARK_RADIUS }) {
   return `(setq fmdb-accessnet-targets '${buildRoleCoordinateLispData(coordinates)})
 (setq fmdb-accessnet-layer "${escapeLispString(ACCESSNET_MARK_LAYER_NAME)}")
@@ -2436,6 +2596,73 @@ function parseExtraRoleCoordinatesFromCheckHtml(htmlText) {
   }
 
   return coordinates;
+}
+
+function parseMissingRoleCoordinatesFromCheckHtml(htmlText) {
+  const html = String(htmlText ?? '').replace(/\r/g, '');
+  const tableRegex = /<table\b[\s\S]*?<\/table>/gi;
+  const coordinates = [];
+  const seen = new Set();
+  let rowCount = 0;
+  let ignoredZeroCount = 0;
+  let ignoredNonGvCount = 0;
+  let tableMatch;
+
+  while ((tableMatch = tableRegex.exec(html)) !== null) {
+    const tableHtml = tableMatch[0];
+    if (!stripHtmlToText(tableHtml).includes(`(${MISSING_ROLE_CHECK_CODE})`)) {
+      continue;
+    }
+
+    const rows = parseCheckTableRows(tableHtml);
+    if (rows.length < 2) {
+      continue;
+    }
+
+    const headers = rows[0].map(normalizeCheckHeader);
+    const locationIndex = headers.indexOf('xy');
+    const ftuIndex = headers.indexOf('kastnr');
+    if (locationIndex < 0 || ftuIndex < 0) {
+      continue;
+    }
+
+    for (const cells of rows.slice(1)) {
+      rowCount++;
+      if (String(cells[ftuIndex] ?? '').trim().toUpperCase() !== 'GV') {
+        ignoredNonGvCount++;
+        continue;
+      }
+
+      const coordinateMatch = String(cells[locationIndex] ?? '').match(/\((-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\)/);
+      if (!coordinateMatch) {
+        continue;
+      }
+
+      const x = Number(coordinateMatch[1]);
+      const y = Number(coordinateMatch[2]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        continue;
+      }
+
+      if (x === 0 && y === 0) {
+        ignoredZeroCount++;
+        continue;
+      }
+
+      const key = `${x}|${y}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        coordinates.push({ x, y });
+      }
+    }
+  }
+
+  return {
+    coordinates,
+    rowCount,
+    ignoredZeroCount,
+    ignoredNonGvCount
+  };
 }
 
 function parseCoordinatesFromCheckHtmlByCode(htmlText, { checkCode, prefixPattern }) {
@@ -3375,6 +3602,137 @@ async function removeExtraRolesFromCheck(projectFolderPath, options = {}) {
   }
 }
 
+async function addMissingRolesFromCheck(projectFolderPath, options = {}) {
+  options.onStage?.('locate');
+  const checkPath = await findCheckHtmlPath(projectFolderPath);
+  if (!checkPath) {
+    throw new Error('No se ha encontrado ningun Checks.htm dentro de la carpeta del proyecto.');
+  }
+
+  options.onStage?.('parse');
+  const htmlText = await fsp.readFile(checkPath, 'utf8');
+  const parsed = parseMissingRoleCoordinatesFromCheckHtml(htmlText);
+  const { coordinates } = parsed;
+  if (coordinates.length === 0) {
+    throw new Error(`No se han encontrado coordenadas GV validas del error ${MISSING_ROLE_CHECK_CODE} en ${checkPath}.`);
+  }
+
+  const dwgPath = await getFirstDwgPath(projectFolderPath);
+  if (!dwgPath) {
+    throw new Error('No se ha encontrado un DWG en la carpeta del proyecto.');
+  }
+
+  const projectToken = path.basename(path.resolve(projectFolderPath)).replace(/[^A-Za-z0-9._-]+/g, '_');
+  const scriptToken = `${projectToken}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const timeoutMs = Math.max(90000, coordinates.length * 250);
+  const lispFilePath = path.join(os.tmpdir(), `fiber-add-missing-roles-${scriptToken}.lsp`);
+  const progressFilePath = path.join(os.tmpdir(), `fiber-add-missing-roles-${scriptToken}.progress`);
+  const scriptFilePath = path.join(os.tmpdir(), `fiber-add-missing-roles-${scriptToken}.scr`);
+  let accoreConsolePath = null;
+  let insertedCount = 0;
+  let existingCount = 0;
+  let noAccessnetCount = 0;
+  let commandError = null;
+  let initialRoleCount = 0;
+
+  try {
+    initialRoleCount = await countRoleBlocksAtCoordinates(projectFolderPath, coordinates, MISSING_ROLE_TOLERANCE);
+    await removeFileIfExists(progressFilePath);
+    await fsp.writeFile(
+      lispFilePath,
+      buildAddMissingRolesLisp({ coordinates, progressFilePath, tolerance: MISSING_ROLE_TOLERANCE }),
+      'utf8'
+    );
+
+    let timedOut = false;
+    let usedOpenDocument = false;
+    const progressMonitor = startProgressMonitor(progressFilePath, {
+      onStage: (stage) => options.onStage?.(stage),
+      onResult: (result) => {
+        const parsedValue = Number(result.value);
+        if (result.name === 'INSERTED' && Number.isFinite(parsedValue)) insertedCount = parsedValue;
+        if (result.name === 'EXISTING' && Number.isFinite(parsedValue)) existingCount = parsedValue;
+        if (result.name === 'NO_ACCESSNET' && Number.isFinite(parsedValue)) noAccessnetCount = parsedValue;
+        if (result.name === 'ERROR') commandError = result.value;
+      }
+    });
+
+    try {
+      const openDocumentResult = await tryRunCommandOnOpenDocument({
+        dwgPath,
+        lispFilePath,
+        commandName: ADD_MISSING_ROLES_COMMAND_NAME,
+        progressFilePath,
+        timeoutMs,
+        saveDocument: true
+      });
+
+      if (openDocumentResult?.handled) {
+        usedOpenDocument = true;
+      }
+      else {
+        accoreConsolePath = await findAccoreConsolePath();
+        if (!accoreConsolePath) {
+          throw new Error('No se ha encontrado accoreconsole.exe. Hace falta una instalacion local de AutoCAD.');
+        }
+        await runAccoreConsoleCommand({
+          accoreConsolePath,
+          dwgPath,
+          lispFilePath,
+          scriptFilePath,
+          commandName: ADD_MISSING_ROLES_COMMAND_NAME,
+          timeoutMs,
+          saveDocument: true
+        });
+      }
+    }
+    catch (error) {
+      if (/Tiempo de espera agotado/i.test(String(error?.message ?? ''))) timedOut = true;
+      else throw error;
+    }
+    finally {
+      await progressMonitor.stop();
+    }
+
+    if (commandError === 'BLOCK_NOT_FOUND') {
+      throw new Error(`No existe la definicion del bloque ${EXTRA_ROLE_BLOCK_NAME} en el DWG.`);
+    }
+
+    const finalRoleCount = await countRoleBlocksAtCoordinates(projectFolderPath, coordinates, MISSING_ROLE_TOLERANCE);
+    const verifiedInsertedCount = Math.max(0, finalRoleCount - initialRoleCount);
+    if (insertedCount <= 0 && verifiedInsertedCount > 0) insertedCount = verifiedInsertedCount;
+    if (insertedCount <= 0 && existingCount <= 0) {
+      throw new Error('No se ha podido insertar ningun ROL: no se encontraron extremos AccessNet validos en las coordenadas del check.');
+    }
+
+    return {
+      checkPath,
+      dwgPath,
+      accoreConsolePath,
+      coordinateCount: coordinates.length,
+      sourceRowCount: parsed.rowCount,
+      ignoredZeroCount: parsed.ignoredZeroCount,
+      ignoredNonGvCount: parsed.ignoredNonGvCount,
+      initialRoleCount,
+      finalRoleCount,
+      insertedCount,
+      existingCount,
+      noAccessnetCount,
+      manualScriptPath: scriptFilePath,
+      timeoutMs,
+      timedOut,
+      usedOpenDocument
+    };
+  }
+  catch (error) {
+    const rootMessage = String(error?.message ?? error).split('\n')[0];
+    throw new Error(`No se ha podido completar la contingencia de ROL faltantes. Se ha dejado el script listo en ${scriptFilePath}. ${rootMessage}`);
+  }
+  finally {
+    await removeFileIfExists(progressFilePath);
+  }
+}
+
 async function drawAccessnetWithoutAddressFromCheck(projectFolderPath, options = {}) {
   if (typeof options.onStage === 'function') {
     options.onStage('locate');
@@ -3510,6 +3868,7 @@ module.exports = {
   CUSTOMER_LAYER_COLORS,
   CROSSING_DP_LAYER_NAME,
   _internal: {
+    buildAddMissingRolesLisp,
     buildCrossingDpGroups,
     buildCrossingDpLisp,
     buildCreateMantelbuisLisp,
@@ -3518,8 +3877,10 @@ module.exports = {
     normalizeMantelbuisMaterial,
     parseMantelbuisExport,
     parseMantelbuisRows,
+    parseMissingRoleCoordinatesFromCheckHtml,
     parseRoutingProblemLabelsFromCheckHtml
   },
+  addMissingRolesFromCheck,
   clearCrossingDpInDwg,
   drawAccessnetWithoutAddressFromCheck,
   drawCrossingDpToDwg,
