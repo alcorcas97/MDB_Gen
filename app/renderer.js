@@ -4,6 +4,8 @@ const elements = {
   bcPath: document.getElementById('bcPath'),
   projectFolderPath: document.getElementById('projectFolderPath'),
   outputPath: document.getElementById('outputPath'),
+  ownerEmail: document.getElementById('ownerEmail'),
+  projectManager: document.getElementById('projectManager'),
   inspectButton: document.getElementById('inspectButton'),
   browseTemplateButton: document.getElementById('browseTemplateButton'),
   browseFcButton: document.getElementById('browseFcButton'),
@@ -185,6 +187,8 @@ function setRunningState(running, cancelAvailable = false) {
     elements.bcPath,
     elements.projectFolderPath,
     elements.outputPath,
+    elements.ownerEmail,
+    elements.projectManager,
     elements.uppercaseOapInput
   ]) {
     input.disabled = running;
@@ -502,7 +506,8 @@ function validateForm() {
     [elements.fcPath, 'FC Excel'],
     [elements.bcPath, 'BC CSV'],
     [elements.projectFolderPath, 'Carpeta del proyecto'],
-    [elements.outputPath, 'MDB de salida']
+    [elements.outputPath, 'MDB de salida'],
+    [elements.ownerEmail, 'Tu correo']
   ]) {
     if (!input.value.trim()) {
       missing.push(label);
@@ -510,6 +515,23 @@ function validateForm() {
   }
 
   return missing;
+}
+
+async function persistDeliverySettings({ silent = false } = {}) {
+  if (!fiberDesktopApi) {
+    return null;
+  }
+
+  const settings = await fiberDesktopApi.saveDeliverySettings({
+    ownerEmail: elements.ownerEmail.value.trim(),
+    projectManager: elements.projectManager.value
+  });
+  elements.ownerEmail.value = settings.ownerEmail;
+  elements.projectManager.value = settings.projectManager;
+  if (!silent) {
+    appendLog('Correos de entrega guardados para los próximos inicios y actualizaciones.', 'meta');
+  }
+  return settings;
 }
 
 function validateToolInputs() {
@@ -694,6 +716,8 @@ async function generateMdb() {
       bcPath: elements.bcPath.value.trim(),
       projectFolderPath: elements.projectFolderPath.value.trim(),
       outputPath: elements.outputPath.value.trim(),
+      ownerEmail: elements.ownerEmail.value.trim(),
+      projectManager: elements.projectManager.value,
       uppercaseOap: elements.uppercaseOapInput.checked
     });
 
@@ -1489,6 +1513,8 @@ async function initialize() {
   const defaults = await fiberDesktopApi.getDefaults();
   const ping = await fiberDesktopApi.ping();
   elements.appVersion.textContent = `v${defaults.appVersion}`;
+  elements.ownerEmail.value = defaults.deliverySettings?.ownerEmail ?? '';
+  elements.projectManager.value = defaults.deliverySettings?.projectManager ?? 'pax';
 
   if (defaults.templatePath) {
     elements.templatePath.value = defaults.templatePath;
@@ -1500,7 +1526,31 @@ async function initialize() {
   maybePopulateOutput();
   updateInspectionCards(null);
   setRunningState(false);
+  if (!elements.ownerEmail.value.trim()) {
+    setStatus('Introduce tu correo una sola vez. Se conservará al cerrar, actualizar o reiniciar la app.', 'warning');
+    elements.ownerEmail.focus();
+  }
 }
+
+elements.ownerEmail.addEventListener('change', () => {
+  void persistDeliverySettings().catch((error) => {
+    setStatus(error.message, 'warning');
+    appendLog(error.message, 'warning');
+  });
+});
+
+elements.ownerEmail.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    elements.ownerEmail.blur();
+  }
+});
+
+elements.projectManager.addEventListener('change', () => {
+  void persistDeliverySettings().catch((error) => {
+    setStatus(error.message, 'warning');
+    appendLog(error.message, 'warning');
+  });
+});
 
 elements.outputPath.addEventListener('input', () => {
   state.outputTouched = elements.outputPath.value.trim() !== '';

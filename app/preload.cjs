@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron/renderer');
 contextBridge.exposeInMainWorld('fiberApp', {
   ping: () => ipcRenderer.invoke('app:ping'),
   getDefaults: () => ipcRenderer.invoke('app:get-defaults'),
+  saveDeliverySettings: (payload) => ipcRenderer.invoke('app:save-delivery-settings', payload),
   openFile: (options) => ipcRenderer.invoke('dialog:open-file', options),
   openFolder: (options) => ipcRenderer.invoke('dialog:open-folder', options),
   saveFile: (options) => ipcRenderer.invoke('dialog:save-file', options),

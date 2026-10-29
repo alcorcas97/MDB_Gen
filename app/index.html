@@ -15,6 +15,20 @@
           <p class="lead">Genera, revisa y ajusta la MDB del proyecto desde FC, BC, DWG y vergunning.</p>
         </div>
 
+        <div class="delivery-settings" aria-label="Correos de entrega">
+          <label class="delivery-setting delivery-setting-email">
+            <span>Tu correo</span>
+            <input id="ownerEmail" type="email" autocomplete="email" spellcheck="false" placeholder="nombre@empresa.nl">
+          </label>
+          <label class="delivery-setting">
+            <span>Project manager</span>
+            <select id="projectManager">
+              <option value="pax">Pax</option>
+              <option value="danny">Danny</option>
+            </select>
+          </label>
+        </div>
+
         <div class="topbar-actions">
           <span id="appVersion" class="version-pill">v1.2.5</span>
           <button id="inspectButton" class="button secondary" type="button">Revisar carpeta</button>

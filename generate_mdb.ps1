@@ -5,6 +5,8 @@ param(
     [string]$OutputPath = '.\generated.mdb',
     [string]$ProjectFolderPath = $null,
     [string]$MetadataPath = $null,
+    [string]$OwnerEmail = $null,
+    [string]$ProjectManagerEmail = $null,
     [switch]$AnalyzeOnly,
     [switch]$UppercaseOap,
     [string]$AnalysisOutputPath = $null,
@@ -3284,6 +3286,22 @@ if ($ExportRiserDataOnly) {
 }
 
 $resolvedTemplate = (Resolve-Path -LiteralPath $TemplatePath).Path
+$normalizedOwnerEmail = (Normalize-Text $OwnerEmail)
+$normalizedProjectManagerEmail = (Normalize-Text $ProjectManagerEmail)
+if ($null -eq $normalizedOwnerEmail -or $normalizedOwnerEmail -notmatch '^[^\s@]+@[^\s@]+\.[^\s@]+$') {
+    throw 'Falta un correo propio valido para Instellingen.'
+}
+if ($null -eq $normalizedProjectManagerEmail -or $normalizedProjectManagerEmail -notmatch '^[^\s@]+@[^\s@]+\.[^\s@]+$') {
+    throw 'Falta el correo valido del project manager para Instellingen.'
+}
+$settingsRows = @(
+    [pscustomobject]@{
+        ID     = 1
+        NAAM   = 'email'
+        WAARDE = "$($normalizedOwnerEmail.ToLowerInvariant()); $($normalizedProjectManagerEmail.ToLowerInvariant())"
+    }
+)
+
 if ([System.IO.Path]::IsPathRooted($OutputPath)) {
     $resolvedOutput = [System.IO.Path]::GetFullPath($OutputPath)
 }
@@ -3310,8 +3328,12 @@ try {
         'ODF',
         'CBN',
         'Vergunning',
-        'POP'
+        'POP',
+        'Instellingen'
     )
+
+    Write-Host "Escribiendo Instellingen (1 fila, 2 correos)"
+    Write-AccessTable -Database $database -TableName 'Instellingen' -Rows $settingsRows
 
     foreach ($tableName in @('POP', 'Vergunning', 'CBN', 'ODF', 'AfwerkODF', 'Traject', 'Duct', 'Accesspoint', 'SpliceBox', 'Kabel', 'Klant', 'Las')) {
         Write-Host "Escribiendo $tableName ($($tableRows[$tableName].Count) filas)"

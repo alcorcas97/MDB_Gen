@@ -63,7 +63,8 @@ body::before {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -227,6 +228,50 @@ h3 {
   flex-wrap: wrap;
   gap: 10px;
   min-width: 300px;
+}
+
+.delivery-settings {
+  align-self: center;
+  display: grid;
+  grid-template-columns: minmax(250px, 1.5fr) minmax(145px, 0.8fr);
+  gap: 10px;
+  min-width: min(470px, 38vw);
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: rgba(6, 15, 19, 0.42);
+}
+
+.delivery-setting {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.delivery-setting span {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.delivery-setting input,
+.delivery-setting select {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  outline: none;
+  color: var(--ink);
+  background: var(--field);
+}
+
+.delivery-setting input:focus,
+.delivery-setting select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
 }
 
 .version-pill {
@@ -712,6 +757,11 @@ select:focus {
     min-width: 0;
   }
 
+  .delivery-settings {
+    width: 100%;
+    min-width: 0;
+  }
+
   .panel-side,
   .panel-log {
     grid-column: auto;
@@ -750,6 +800,10 @@ select:focus {
   .topbar-actions,
   .action-buttons {
     display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .delivery-settings {
     grid-template-columns: 1fr;
   }
 }

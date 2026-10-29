@@ -22,6 +22,12 @@ const {
   restoreOperation,
   updateOperationBackup
 } = require('./lib/operation-history.cjs');
+const {
+  PROJECT_MANAGERS,
+  loadDeliverySettings,
+  resolveDeliveryEmails,
+  saveDeliverySettings
+} = require('./lib/delivery-settings.cjs');
 
 const appRoot = path.resolve(__dirname, '..');
 const generatorScriptPath = path.join(appRoot, 'generate_mdb.ps1');
@@ -47,6 +53,10 @@ let crossCheckToolsModule = null;
 let updateCheckStarted = false;
 let usageLogStarted = false;
 const selfTestMode = process.argv.includes('--self-test');
+
+function getDeliverySettingsPath() {
+  return path.join(app.getPath('userData'), 'delivery-settings.json');
+}
 
 function appendRuntimeLog(message) {
   try {
@@ -2161,7 +2171,11 @@ function runGeneratorWithPowerShell(payload, metadataPath) {
     '-ProjectFolderPath',
     payload.projectFolderPath,
     '-MetadataPath',
-    metadataPath
+    metadataPath,
+    '-OwnerEmail',
+    payload.ownerEmail,
+    '-ProjectManagerEmail',
+    payload.projectManagerEmail
   ];
   if (payload.uppercaseOap) args.push('-UppercaseOap');
   return runPowerShellScript(args);
@@ -2668,8 +2682,14 @@ async function resolveBackboneCableNamingChoice(projectFolderPath) {
 ipcMain.handle('app:get-defaults', async () => ({
   appVersion: app.getVersion(),
   isPackaged: app.isPackaged,
-  templatePath: fs.existsSync(bundledTemplatePath) ? bundledTemplatePath : null
+  templatePath: fs.existsSync(bundledTemplatePath) ? bundledTemplatePath : null,
+  deliverySettings: loadDeliverySettings(getDeliverySettingsPath()),
+  projectManagers: Object.entries(PROJECT_MANAGERS).map(([key, manager]) => ({ key, ...manager }))
 }));
+
+ipcMain.handle('app:save-delivery-settings', async (_event, payload) => (
+  saveDeliverySettings(getDeliverySettingsPath(), payload)
+));
 
 ipcMain.handle('app:ping', async () => ({
   ok: true,
@@ -4838,18 +4858,26 @@ ipcMain.handle('generation:run', async (_event, payload) => {
   }
 
   validateGenerationInput(payload);
+  const deliveryEmails = resolveDeliveryEmails(payload);
+  saveDeliverySettings(getDeliverySettingsPath(), deliveryEmails);
+  const generationPayload = {
+    ...payload,
+    ownerEmail: deliveryEmails.ownerEmail,
+    projectManager: deliveryEmails.projectManager,
+    projectManagerEmail: deliveryEmails.projectManagerEmail
+  };
 
   sendGenerationEvent({
     type: 'status',
     message: 'Analizando DWG, vergunningen y estructura del proyecto...'
   });
 
-  const complexRenames = await normalizeLongComplexNames(payload.projectFolderPath);
+  const complexRenames = await normalizeLongComplexNames(generationPayload.projectFolderPath);
   if (complexRenames.length > 0) {
     const complexRenameLogPath = await writeComplexRenameLog({
-      projectFolderPath: payload.projectFolderPath,
-      fcPath: payload.fcPath,
-      bcPath: payload.bcPath,
+      projectFolderPath: generationPayload.projectFolderPath,
+      fcPath: generationPayload.fcPath,
+      bcPath: generationPayload.bcPath,
       renames: complexRenames
     });
     sendGenerationEvent({
@@ -4863,7 +4891,7 @@ ipcMain.handle('generation:run', async (_event, payload) => {
   }
 
   const { extractProjectMetadata } = getProjectMetadataModule();
-  const metadata = await extractProjectMetadata(payload.projectFolderPath);
+  const metadata = await extractProjectMetadata(generationPayload.projectFolderPath);
 
   sendGenerationEvent({
     type: 'summary',
@@ -4903,7 +4931,7 @@ ipcMain.handle('generation:run', async (_event, payload) => {
       message: 'Comprobando si hay DPs ambiguos...'
     });
 
-    const analysis = await analyzeAmbiguousInternalDpsWithPowerShell(payload, tempMetadataPath);
+    const analysis = await analyzeAmbiguousInternalDpsWithPowerShell(generationPayload, tempMetadataPath);
     const internalDpDecisions = await resolveAmbiguousInternalDps(analysis);
 
     if (Object.keys(internalDpDecisions).length > 0) {
@@ -4916,7 +4944,7 @@ ipcMain.handle('generation:run', async (_event, payload) => {
       message: 'Confirmando numeracion de bloqueos 96V...'
     });
 
-    metadataPayload.backboneCableNaming = await resolveBackboneCableNamingChoice(payload.projectFolderPath);
+    metadataPayload.backboneCableNaming = await resolveBackboneCableNamingChoice(generationPayload.projectFolderPath);
     await fsp.writeFile(tempMetadataPath, JSON.stringify(metadataPayload, null, 2), 'utf8');
 
     sendGenerationEvent({
@@ -4925,18 +4953,18 @@ ipcMain.handle('generation:run', async (_event, payload) => {
     });
 
     const generationBackup = await createOperationBackup({
-      projectPath: payload.projectFolderPath,
+      projectPath: generationPayload.projectFolderPath,
       operation: 'GenerateMdb',
       label: 'Generar MDB',
-      filePaths: [payload.outputPath]
+      filePaths: [generationPayload.outputPath]
     });
     try {
-      await runGeneratorWithPowerShell(payload, tempMetadataPath);
+      await runGeneratorWithPowerShell(generationPayload, tempMetadataPath);
     }
     catch (error) {
       if (generationBackup) {
         await updateOperationBackup({
-          projectPath: payload.projectFolderPath,
+          projectPath: generationPayload.projectFolderPath,
           entryId: generationBackup.id,
           status: 'failed',
           summary: { error: String(error?.message ?? error) }
@@ -4954,8 +4982,8 @@ ipcMain.handle('generation:run', async (_event, payload) => {
       });
 
       oapSummary = await applyOapCoordinateToMdb({
-        projectFolderPath: payload.projectFolderPath,
-        mdbPath: payload.outputPath,
+        projectFolderPath: generationPayload.projectFolderPath,
+        mdbPath: generationPayload.outputPath,
         coordinates: metadata.coordinates
       });
 
@@ -4981,7 +5009,7 @@ ipcMain.handle('generation:run', async (_event, payload) => {
 
     if (generationBackup) {
       await updateOperationBackup({
-        projectPath: payload.projectFolderPath,
+        projectPath: generationPayload.projectFolderPath,
         entryId: generationBackup.id,
         status: 'completed',
         summary: { generated: true }
@@ -4989,7 +5017,7 @@ ipcMain.handle('generation:run', async (_event, payload) => {
     }
 
     return {
-      outputPath: payload.outputPath,
+      outputPath: generationPayload.outputPath,
       metadataSummary: {
         coordinateCount: metadata.diagnostics.coordinateCount,
         permitPdfCount: metadata.diagnostics.permitPdfCount,
