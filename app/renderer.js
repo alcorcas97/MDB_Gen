@@ -37,6 +37,7 @@ const elements = {
   applyDempingContingencyButton: document.getElementById('applyDempingContingencyButton'),
   createGestuurdeBoringenButton: document.getElementById('createGestuurdeBoringenButton'),
   placePhktTextsButton: document.getElementById('placePhktTextsButton'),
+  validatePveDwgButton: document.getElementById('validatePveDwgButton'),
   placeRoutingPhktFromCheckButton: document.getElementById('placeRoutingPhktFromCheckButton'),
   getOapCoordinateButton: document.getElementById('getOapCoordinateButton'),
   uppercaseOapInput: document.getElementById('uppercaseOapInput'),
@@ -170,6 +171,7 @@ function setRunningState(running, cancelAvailable = false) {
     elements.clearCrossingDpButton,
     elements.createGestuurdeBoringenButton,
     elements.placePhktTextsButton,
+    elements.validatePveDwgButton,
     elements.placeRoutingPhktFromCheckButton,
     elements.removeExtraRolesButton,
     elements.addMissingRolesButton,
@@ -1464,6 +1466,38 @@ async function createGestuurdeBoringen() {
   });
 }
 
+function formatPveFinding(finding) {
+  const location = [
+    finding.layer ? `capa ${finding.layer}` : null,
+    finding.handle ? `handle ${finding.handle}` : null,
+    Number.isFinite(finding.x) && Number.isFinite(finding.y)
+      ? `(${finding.x.toFixed(3)}, ${finding.y.toFixed(3)})`
+      : null
+  ].filter(Boolean).join(', ');
+  return `- [${finding.code}] ${finding.message}${location ? ` [${location}]` : ''}`;
+}
+
+async function validatePveDwg() {
+  await runProjectTool({
+    startMessage: 'Validando el DWG contra las reglas PvE...',
+    successMessage: (result) => result.summary.total === 0
+      ? 'Validacion PvE completada sin incidencias.'
+      : `Validacion PvE: ${result.summary.errors} errores y ${result.summary.warnings} avisos.`,
+    successLog: (result) => {
+      const header = `Validador PvE (solo lectura): ${result.summary.errors} errores, ${result.summary.warnings} avisos. DWG: ${result.dwgPath}`;
+      const errors = result.findings.filter((finding) => finding.severity === 'error');
+      const warnings = result.findings.filter((finding) => finding.severity === 'warning');
+      return [
+        header,
+        ...errors.map(formatPveFinding),
+        ...(warnings.length > 0 ? ['Avisos que requieren revision manual:'] : []),
+        ...warnings.map(formatPveFinding)
+      ].join('\n');
+    },
+    action: (payload) => fiberDesktopApi.validatePveDwg(payload)
+  });
+}
+
 async function removeExtraRoles() {
   await runProjectTool({
     startMessage: 'Buscando errores M-30173 en el check y eliminando bloques ROL extra...',
@@ -1696,6 +1730,10 @@ elements.createGestuurdeBoringenButton.addEventListener('click', () => {
 
 elements.placePhktTextsButton.addEventListener('click', () => {
   void placePhktTexts();
+});
+
+elements.validatePveDwgButton.addEventListener('click', () => {
+  void validatePveDwg();
 });
 
 elements.placeRoutingPhktFromCheckButton.addEventListener('click', () => {

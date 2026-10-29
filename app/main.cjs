@@ -3991,6 +3991,26 @@ ipcMain.handle('dwg:clear-crossing-dp', async (_event, payload) => {
   return result;
 });
 
+ipcMain.handle('dwg:validate-pve', async (_event, payload) => {
+  if (activeRun) {
+    throw new Error('Ya hay una operacion en curso.');
+  }
+
+  validateProjectAndMdbInput(payload);
+  sendGenerationEvent({
+    type: 'status',
+    message: 'Analizando capas, propiedades y etiquetas PvE del DWG...'
+  });
+  const { validatePveDwg } = getDwgToolsModule();
+  const result = await validatePveDwg(payload.projectFolderPath);
+  sendGenerationEvent({
+    type: 'log',
+    level: result.summary.errors > 0 ? 'warning' : 'info',
+    message: `Validador PvE terminado sin modificar el DWG: ${result.summary.errors} errores y ${result.summary.warnings} avisos.\n`
+  });
+  return result;
+});
+
 ipcMain.handle('dwg:place-phkt-texts', async (_event, payload) => {
   if (activeRun) {
     throw new Error('Ya hay una operacion en curso.');

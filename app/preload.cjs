@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('fiberApp', {
   applyDempingContingency: (payload) => ipcRenderer.invoke('mdb:apply-demping-contingency', payload),
   createGestuurdeBoringen: (payload) => ipcRenderer.invoke('dwg:create-gestuurde-boringen', payload),
   placePhktTexts: (payload) => ipcRenderer.invoke('dwg:place-phkt-texts', payload),
+  validatePveDwg: (payload) => ipcRenderer.invoke('dwg:validate-pve', payload),
   placeRoutingPhktFromCheck: (payload) => ipcRenderer.invoke('dwg:place-routing-phkt-from-check', payload),
   getOapCoordinate: (payload) => ipcRenderer.invoke('dwg:get-oap-coordinate', payload),
   uppercaseOap: (payload) => ipcRenderer.invoke('mdb:uppercase-oap', payload),

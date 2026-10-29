@@ -31,6 +31,7 @@ const APPLY_BORING_RENAMES_COMMAND_NAME = 'FIBER_APPLY_BORING_RENAMES';
 const EXTRACT_PHKT_PLACEMENT_COMMAND_NAME = 'FIBER_EXTRACT_PHKT_PLACEMENT';
 const REVIEW_PHKT_PLACEMENT_COMMAND_NAME = 'FIBER_REVIEW_PHKT_PLACEMENT';
 const CREATE_MANTELBUIS_COMMAND_NAME = 'FIBER_CREATE_MANTELBUIS';
+const VALIDATE_PVE_MLEADER_COMMAND_NAME = 'FIBER_VALIDATE_PVE_MLEADERS';
 const EXTRA_ROLE_BLOCK_NAME = 'ROL';
 const EXTRA_ROLE_CHECK_CODE = 'M-30173';
 const EXTRA_ROLE_TOLERANCE = 1;
@@ -51,6 +52,25 @@ const CROSSING_DP_COLORS = [
 ];
 const ROUTING_PROBLEM_SECTION_PATTERN = /routing\s+problem/i;
 const ROUTING_NO_NETWORK_MESSAGE_PATTERN = /no\s+network\s+connection\s+found\s+within\s+0\s*[,\.]\s*1\s*m\s+from\s+the\s+point/i;
+const PVE_ALLOWED_LAYERS = new Set([
+  '0',
+  'opmerking',
+  'defpoints',
+  'accessnet',
+  'trench',
+  'accesspoint',
+  'vergunning',
+  'drilling',
+  'accesspoint_dim',
+  'text',
+  'geulinformatie'
+]);
+const PVE_BYLAYER_ENTITY_LINEWEIGHTS = new Set([-1, 29]);
+const PVE_METERS_INSUNITS = 6;
+const PVE_ROTATION_TOLERANCE = Math.PI / 180;
+const PVE_GEUL_LABEL_DISTANCE = 5;
+const PVE_MATERIAL_PATTERN = /\b(?:HDPE|FLEX|ST)\s*\d+(?:\s*-\s*[A-Z]+)?\b/i;
+const PVE_UPPERCASE_MULTIPLIER_PATTERN = /(?:^|[\s,;+])\d+\s*X\s*(?=(?:HDPE|FLEX|ST|\d))/;
 
 const CUSTOMER_LAYER_COLORS = new Map([
   ['ANDE', 3],
@@ -139,6 +159,375 @@ async function getDatabase(projectFolderPath) {
   return {
     dwgPath,
     database
+  };
+}
+
+function getPveLayerEntries(database) {
+  const entries = database?.tables?.LAYER?.entries;
+  return Array.isArray(entries) ? entries : [];
+}
+
+function getPveEntityPoint(entity) {
+  const point = entity?.startPoint ?? entity?.insertionPoint ?? entity?.point;
+  if (!point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) {
+    return null;
+  }
+
+  return { x: Number(point.x), y: Number(point.y) };
+}
+
+function getPveEntityVertices(entity) {
+  const rawVertices = entity?.vertices ?? entity?.points ?? [];
+  const vertices = [];
+  for (const entry of rawVertices) {
+    const point = entry?.vertex ?? entry;
+    if (Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.y))) {
+      vertices.push({ x: Number(point.x), y: Number(point.y) });
+    }
+  }
+
+  if (vertices.length === 0) {
+    const start = getPveEntityPoint(entity);
+    const end = entity?.endPoint;
+    if (start) {
+      vertices.push(start);
+    }
+    if (Number.isFinite(Number(end?.x)) && Number.isFinite(Number(end?.y))) {
+      vertices.push({ x: Number(end.x), y: Number(end.y) });
+    }
+  }
+
+  return vertices;
+}
+
+function distancePointToSegment(point, start, end) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  if (dx === 0 && dy === 0) {
+    return Math.hypot(point.x - start.x, point.y - start.y);
+  }
+
+  const projection = Math.max(0, Math.min(1,
+    ((point.x - start.x) * dx + (point.y - start.y) * dy) / ((dx * dx) + (dy * dy))
+  ));
+  return Math.hypot(
+    point.x - (start.x + (projection * dx)),
+    point.y - (start.y + (projection * dy))
+  );
+}
+
+function isPointNearEntity(point, entity, tolerance = PVE_GEUL_LABEL_DISTANCE) {
+  const vertices = getPveEntityVertices(entity);
+  if (vertices.length === 1) {
+    return Math.hypot(point.x - vertices[0].x, point.y - vertices[0].y) <= tolerance;
+  }
+
+  for (let index = 1; index < vertices.length; index++) {
+    if (distancePointToSegment(point, vertices[index - 1], vertices[index]) <= tolerance) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function getPveTextWidth(entity) {
+  const candidates = [entity?.width, entity?.textWidth, entity?.text?.width];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function isPveTextEntity(entity) {
+  return ['TEXT', 'MTEXT', 'MLEADER', 'LEADER'].includes(String(entity?.type ?? '').toUpperCase());
+}
+
+function isPveGeulLabel(entity, text = getEntityText(entity)) {
+  const layer = String(entity?.layer ?? '').toLowerCase();
+  const styleName = String(entity?.styleName ?? entity?.textStyle ?? '').toLowerCase();
+  return layer === 'geulinformatie'
+    || styleName === 'iso geulinfo'
+    || Boolean(text && PVE_MATERIAL_PATTERN.test(text));
+}
+
+function normalizePveRotation(value) {
+  const rotation = Number(value);
+  if (!Number.isFinite(rotation)) {
+    return null;
+  }
+  const fullTurn = Math.PI * 2;
+  return ((rotation % fullTurn) + fullTurn) % fullTurn;
+}
+
+function createPveFinding(code, severity, message, details = {}) {
+  return {
+    code,
+    severity,
+    message,
+    entityType: details.entityType ?? null,
+    layer: details.layer ?? null,
+    handle: details.handle ?? null,
+    x: Number.isFinite(details.x) ? details.x : null,
+    y: Number.isFinite(details.y) ? details.y : null
+  };
+}
+
+function validatePveDatabase(database) {
+  const findings = [];
+  const layers = getPveLayerEntries(database);
+  const entities = Array.isArray(database?.entities) ? database.entities : [];
+
+  for (const layer of layers) {
+    const layerName = normalizeText(layer?.name) ?? '(sin nombre)';
+    const normalizedLayerName = layerName.toLowerCase();
+    if (!PVE_ALLOWED_LAYERS.has(normalizedLayerName)) {
+      findings.push(createPveFinding(
+        'PVE_LAYER_NOT_ALLOWED',
+        'error',
+        `La capa "${layerName}" no pertenece al conjunto PvE permitido.`,
+        { entityType: 'LAYER', layer: layerName, handle: normalizeText(layer?.handle) }
+      ));
+    }
+    if (layer?.off === true) {
+      findings.push(createPveFinding(
+        'PVE_LAYER_OFF',
+        'error',
+        `La capa "${layerName}" esta apagada.`,
+        { entityType: 'LAYER', layer: layerName, handle: normalizeText(layer?.handle) }
+      ));
+    }
+  }
+
+  const zeroLayer = layers.find((layer) => String(layer?.name ?? '').toLowerCase() === '0');
+  if (!zeroLayer) {
+    findings.push(createPveFinding('PVE_LAYER_ZERO_MISSING', 'error', 'No existe la capa 0.'));
+  }
+  else {
+    const colorName = normalizeText(zeroLayer.colorName)?.toLowerCase() ?? '';
+    const allowedColorName = colorName === '' || colorName === 'white' || colorName === 'aci 7';
+    if (Number(zeroLayer.colorIndex) !== 7 || !allowedColorName) {
+      findings.push(createPveFinding(
+        'PVE_LAYER_ZERO_COLOR',
+        'error',
+        'La capa 0 debe usar el color ACI 7 (White), no TrueColor ni otro indice.',
+        { entityType: 'LAYER', layer: '0', handle: normalizeText(zeroLayer.handle) }
+      ));
+    }
+  }
+
+  if (Number(database?.header?.INSUNITS) !== PVE_METERS_INSUNITS) {
+    findings.push(createPveFinding(
+      'PVE_UNITS_NOT_METERS',
+      'error',
+      `Las unidades INSUNITS deben ser metros (6); valor actual: ${database?.header?.INSUNITS ?? 'sin definir'}.`
+    ));
+  }
+
+  const geulLabels = [];
+  const geulRoutes = [];
+  for (const entity of entities) {
+    const entityType = String(entity?.type ?? '').toUpperCase();
+    const layer = normalizeText(entity?.layer);
+    const point = getPveEntityPoint(entity);
+    const details = {
+      entityType,
+      layer,
+      handle: normalizeText(entity?.handle),
+      x: point?.x,
+      y: point?.y
+    };
+
+    if (Number.isFinite(Number(entity?.lineweight))
+      && !PVE_BYLAYER_ENTITY_LINEWEIGHTS.has(Number(entity.lineweight))) {
+      findings.push(createPveFinding(
+        'PVE_LINEWEIGHT_NOT_BYLAYER',
+        'error',
+        `El objeto ${details.handle ?? ''} tiene Lineweight distinto de ByLayer.`,
+        details
+      ));
+    }
+
+    const text = isPveTextEntity(entity) ? getEntityText(entity) : null;
+    if (text && PVE_UPPERCASE_MULTIPLIER_PATTERN.test(text)) {
+      findings.push(createPveFinding(
+        'PVE_UPPERCASE_X',
+        'error',
+        `La etiqueta "${text}" debe usar x minuscula para el multiplicador.`,
+        details
+      ));
+    }
+
+    if (isPveTextEntity(entity)) {
+      const geulLabel = isPveGeulLabel(entity, text);
+      if (geulLabel) {
+        geulLabels.push({ entity, point, text });
+        const width = getPveTextWidth(entity);
+        if (width !== null && Math.abs(width) > 0.000001) {
+          findings.push(createPveFinding(
+            'PVE_GEUL_LABEL_WIDTH',
+            'error',
+            `La geullabel "${text ?? '(vacia)'}" debe tener Width = 0; valor actual: ${width}.`,
+            details
+          ));
+        }
+        if (!text) {
+          findings.push(createPveFinding(
+            'PVE_GEULINFO_INCOMPLETE',
+            'warning',
+            'Se ha encontrado una geullabel vacia; revisar manualmente la geulinformatie.',
+            details
+          ));
+        }
+      }
+
+      const rotation = normalizePveRotation(entity?.rotation ?? entity?.textRotation);
+      if (rotation !== null
+        && rotation > ((Math.PI / 2) + PVE_ROTATION_TOLERANCE)
+        && rotation < (((Math.PI * 3) / 2) - PVE_ROTATION_TOLERANCE)) {
+        findings.push(createPveFinding(
+          'PVE_LABEL_INVERTED',
+          'error',
+          `La etiqueta "${text ?? '(sin texto)'}" esta invertida (${(rotation * 180 / Math.PI).toFixed(1)} grados).`,
+          details
+        ));
+      }
+    }
+
+    if (entityType === 'MLEADER') {
+      const landingValue = entity?.enableLanding
+        ?? entity?.leaderExtension
+        ?? entity?.hasLanding
+        ?? entity?.landingEnabled;
+      if (landingValue === true || Number(landingValue) === 1) {
+        findings.push(createPveFinding(
+          'PVE_LEADER_EXTENSION',
+          'error',
+          'El Multileader debe tener Leader extension = No.',
+          details
+        ));
+      }
+    }
+
+    if (entityType === 'MLINE'
+      && ['trench', 'drilling'].includes(String(layer ?? '').toLowerCase())) {
+      geulRoutes.push(entity);
+    }
+  }
+
+  const positionedGeulLabels = geulLabels.filter((label) => label.point && label.text);
+  const rawMissingLabels = Math.max(0, geulRoutes.length - positionedGeulLabels.length);
+  const minimumMeaningfulGap = Math.max(2, Math.ceil(geulRoutes.length * 0.15));
+  const estimatedMissingLabels = rawMissingLabels >= minimumMeaningfulGap ? rawMissingLabels : 0;
+  const unmatchedRoutes = geulRoutes.filter((route) =>
+    !positionedGeulLabels.some((label) => isPointNearEntity(label.point, route))
+  );
+  for (const route of unmatchedRoutes.slice(0, estimatedMissingLabels)) {
+      const point = getPveEntityPoint(route);
+      findings.push(createPveFinding(
+        'PVE_GEULINFO_INCOMPLETE',
+        'warning',
+        'No se ha encontrado una geullabel de material junto a esta conduccion; revisar manualmente que la geulinformatie incluya todos los tubos.',
+        {
+          entityType: route.type,
+          layer: normalizeText(route.layer),
+          handle: normalizeText(route.handle),
+          x: point?.x,
+          y: point?.y
+        }
+      ));
+  }
+
+  const errors = findings.filter((finding) => finding.severity === 'error').length;
+  const warnings = findings.filter((finding) => finding.severity === 'warning').length;
+  return {
+    findings,
+    summary: {
+      errors,
+      warnings,
+      total: findings.length
+    }
+  };
+}
+
+async function validatePveDwg(projectFolderPath) {
+  const { dwgPath, database } = await getDatabase(projectFolderPath);
+  const result = validatePveDatabase(database);
+  const mleaderAudit = await auditPveMleadersWithAutoCad(dwgPath);
+
+  if (mleaderAudit.skippedReason) {
+    result.findings.push(createPveFinding(
+      'PVE_MLEADER_CHECK_SKIPPED',
+      'warning',
+      `No se pudo comprobar Leader extension en AutoCAD: ${mleaderAudit.skippedReason}`
+    ));
+  }
+  else {
+    for (const item of mleaderAudit.items) {
+      const details = {
+        entityType: 'MLEADER',
+        layer: item.layer,
+        handle: item.handle,
+        x: item.x,
+        y: item.y
+      };
+      if (item.enableLanding) {
+        result.findings.push(createPveFinding(
+          'PVE_LEADER_EXTENSION',
+          'error',
+          'El Multileader debe tener Leader extension = No.',
+          details
+        ));
+      }
+      if (Number.isFinite(item.lineweight) && item.lineweight !== -1) {
+        result.findings.push(createPveFinding(
+          'PVE_LINEWEIGHT_NOT_BYLAYER',
+          'error',
+          `El objeto ${item.handle ?? ''} tiene Lineweight distinto de ByLayer.`,
+          details
+        ));
+      }
+      if (item.text && PVE_UPPERCASE_MULTIPLIER_PATTERN.test(item.text)) {
+        result.findings.push(createPveFinding(
+          'PVE_UPPERCASE_X',
+          'error',
+          `La etiqueta "${item.text}" debe usar x minuscula para el multiplicador.`,
+          details
+        ));
+      }
+      if (isPveGeulLabel({ layer: item.layer, styleName: item.styleName }, item.text)
+        && Number.isFinite(item.width) && Math.abs(item.width) > 0.000001) {
+        result.findings.push(createPveFinding(
+          'PVE_GEUL_LABEL_WIDTH',
+          'error',
+          `La geullabel "${item.text ?? '(vacia)'}" debe tener Width = 0; valor actual: ${item.width}.`,
+          details
+        ));
+      }
+      const rotation = normalizePveRotation(item.rotation);
+      if (rotation !== null
+        && rotation > ((Math.PI / 2) + PVE_ROTATION_TOLERANCE)
+        && rotation < (((Math.PI * 3) / 2) - PVE_ROTATION_TOLERANCE)) {
+        result.findings.push(createPveFinding(
+          'PVE_LABEL_INVERTED',
+          'error',
+          `La etiqueta "${item.text ?? '(sin texto)'}" esta invertida (${(rotation * 180 / Math.PI).toFixed(1)} grados).`,
+          details
+        ));
+      }
+    }
+  }
+
+  result.summary.errors = result.findings.filter((finding) => finding.severity === 'error').length;
+  result.summary.warnings = result.findings.filter((finding) => finding.severity === 'warning').length;
+  result.summary.total = result.findings.length;
+  return {
+    dwgPath,
+    ...result,
+    mleaderCount: mleaderAudit.items.length,
+    readOnly: true
   };
 }
 
@@ -1219,6 +1608,180 @@ ${buildProgressHelpersLisp(progressFilePath)}
   (princ)
 )
 `;
+}
+
+function buildPveMleaderAuditLisp({ outputFilePath, progressFilePath }) {
+  return `(setq fmdb-output-file "${escapeLispString(toAutoLispPath(outputFilePath))}")
+${buildProgressHelpersLisp(progressFilePath)}
+(vl-load-com)
+
+(defun fmdb-safe-property (object property fallback / value)
+  (if (vlax-property-available-p object property)
+    (progn
+      (setq value (vl-catch-all-apply 'vlax-get (list object property)))
+      (if (vl-catch-all-error-p value) fallback value)
+    )
+    fallback
+  )
+)
+
+(defun fmdb-clean-text (value)
+  (if value
+    (vl-string-translate (strcat (chr 9) (chr 10) (chr 13)) "   " value)
+    ""
+  )
+)
+
+(defun fmdb-real (value)
+  (if (numberp value) (rtos value 2 8) "")
+)
+
+(defun fmdb-point-list (value / raw)
+  (cond
+    ((= (type value) 'LIST) value)
+    ((= (type value) 'VARIANT)
+      (setq raw (vlax-variant-value value))
+      (if (= (type raw) 'SAFEARRAY) (vlax-safearray->list raw) nil)
+    )
+    ((= (type value) 'SAFEARRAY) (vlax-safearray->list value))
+    (t nil)
+  )
+)
+
+(defun fmdb-write-line (value / handle)
+  (setq handle (open fmdb-output-file "a"))
+  (if handle
+    (progn (write-line value handle) (close handle) T)
+    nil
+  )
+)
+
+(defun c:${VALIDATE_PVE_MLEADER_COMMAND_NAME} (/ handle selection index entity object point text total output)
+  (setq handle (open fmdb-output-file "w"))
+  (if handle (close handle))
+  (setq total 0)
+  (fmdb-report-stage "mleaders")
+  (if (setq selection (ssget "_X" '((0 . "MULTILEADER"))))
+    (progn
+      (setq index 0)
+      (repeat (sslength selection)
+        (setq entity (ssname selection index))
+        (setq object (vlax-ename->vla-object entity))
+        (setq point (fmdb-point-list (fmdb-safe-property object 'TextLocation nil)))
+        (setq text (fmdb-clean-text (fmdb-safe-property object 'TextString "")))
+        (setq output
+          (strcat
+            (vla-get-Handle object) (chr 9)
+            (fmdb-clean-text (vla-get-Layer object)) (chr 9)
+            text (chr 9)
+            (fmdb-real (fmdb-safe-property object 'TextWidth nil)) (chr 9)
+            (fmdb-real (fmdb-safe-property object 'TextRotation nil)) (chr 9)
+            (vl-princ-to-string (fmdb-safe-property object 'EnableLanding :vlax-false)) (chr 9)
+            (vl-princ-to-string (fmdb-safe-property object 'Lineweight -1)) (chr 9)
+            (fmdb-clean-text (fmdb-safe-property object 'TextStyleName "")) (chr 9)
+            (if point (fmdb-real (car point)) "") (chr 9)
+            (if point (fmdb-real (cadr point)) "")
+          )
+        )
+        (if (fmdb-write-line output) (setq total (1+ total)))
+        (setq index (1+ index))
+      )
+    )
+  )
+  (fmdb-report-result "MLEADERS" (itoa total))
+  (fmdb-report-done "PVE_MLEADERS")
+  (princ)
+)
+`;
+}
+
+function parsePveMleaderAudit(text) {
+  return String(text ?? '')
+    .replace(/\r/g, '')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [handle, layer, rawText, width, rotation, landing, lineweight, styleName, x, y] = line.split('\t');
+      return {
+        handle: normalizeText(handle),
+        layer: normalizeText(layer),
+        text: normalizeText(rawText),
+        width: width === '' ? null : Number(width),
+        rotation: rotation === '' ? null : Number(rotation),
+        enableLanding: /(?:true|vlax-true|-1)/i.test(String(landing ?? '')),
+        lineweight: lineweight === '' ? null : Number(lineweight),
+        styleName: normalizeText(styleName),
+        x: x === '' ? null : Number(x),
+        y: y === '' ? null : Number(y)
+      };
+    })
+    .filter((item) => item.handle);
+}
+
+async function auditPveMleadersWithAutoCad(dwgPath) {
+  const token = `${path.basename(dwgPath).replace(/[^A-Za-z0-9._-]+/g, '_')}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const lispFilePath = path.join(os.tmpdir(), `fiber-pve-mleaders-${token}.lsp`);
+  const progressFilePath = path.join(os.tmpdir(), `fiber-pve-mleaders-${token}.progress`);
+  const outputFilePath = path.join(os.tmpdir(), `fiber-pve-mleaders-${token}.tsv`);
+  const scriptFilePath = path.join(os.tmpdir(), `fiber-pve-mleaders-${token}.scr`);
+  const temporaryPaths = [lispFilePath, progressFilePath, outputFilePath, scriptFilePath];
+  const timeoutMs = 90000;
+
+  try {
+    await Promise.all(temporaryPaths.map((targetPath) => removeFileIfExists(targetPath)));
+    await fsp.writeFile(lispFilePath, buildPveMleaderAuditLisp({ outputFilePath, progressFilePath }), 'utf8');
+    const openDocumentResult = await tryRunCommandOnOpenDocument({
+      dwgPath,
+      lispFilePath,
+      commandName: VALIDATE_PVE_MLEADER_COMMAND_NAME,
+      progressFilePath,
+      outputFilePath,
+      timeoutMs,
+      saveDocument: false
+    });
+
+    let consoleResult = null;
+    if (!openDocumentResult?.handled) {
+      const accoreConsolePath = await findAccoreConsolePath();
+      if (!accoreConsolePath) {
+        return { items: [], skippedReason: 'no se encontro AutoCAD ni AccoreConsole' };
+      }
+      consoleResult = await runAccoreConsoleCommand({
+        accoreConsolePath,
+        dwgPath,
+        lispFilePath,
+        scriptFilePath,
+        commandName: VALIDATE_PVE_MLEADER_COMMAND_NAME,
+        timeoutMs,
+        saveDocument: false
+      });
+    }
+
+    if (!(await pathExists(outputFilePath))) {
+      const progressText = await fsp.readFile(progressFilePath, 'utf8').catch(() => '');
+      const progressDetail = normalizeText(progressText?.replace(/\s+/g, ' '));
+      const consoleDetail = normalizeText(
+        `${sanitizeProcessOutput(consoleResult?.stdout)} ${sanitizeProcessOutput(consoleResult?.stderr)}`.replace(/\s+/g, ' ')
+      );
+      return {
+        items: [],
+        skippedReason: `AutoCAD no genero el resultado temporal de Multileaders${progressDetail ? ` (${progressDetail})` : ''}${consoleDetail ? ` [${consoleDetail.slice(-500)}]` : ''}`
+      };
+    }
+    return {
+      items: parsePveMleaderAudit(await fsp.readFile(outputFilePath, 'utf8')),
+      skippedReason: null
+    };
+  }
+  catch (error) {
+    return {
+      items: [],
+      skippedReason: String(error?.message ?? error).split('\n')[0]
+    };
+  }
+  finally {
+    await Promise.all(temporaryPaths.map((targetPath) => removeFileIfExists(targetPath)));
+  }
 }
 
 function buildExportBoringReferencesLisp({ outputFilePath, progressFilePath }) {
@@ -3958,7 +4521,10 @@ module.exports = {
     parseMantelbuisRows,
     parseMissingRoleCoordinatesFromCheckHtml,
     parseRoutingProblemLabelsFromCheckHtml,
-    buildBoringRenamePlan
+    buildBoringRenamePlan,
+    buildPveMleaderAuditLisp,
+    parsePveMleaderAudit,
+    validatePveDatabase
   },
   addMissingRolesFromCheck,
   clearCrossingDpInDwg,
@@ -3974,5 +4540,6 @@ module.exports = {
   placeRoutingProblemPhktFromCheck,
   placePhktTextsAtAccessnetVertices,
   pickPointFromOpenDocument,
-  removeExtraRolesFromCheck
+  removeExtraRolesFromCheck,
+  validatePveDwg
 };
