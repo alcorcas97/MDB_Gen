@@ -4689,7 +4689,7 @@ ipcMain.handle('dwg:create-gestuurde-boringen', async (_event, payload) => {
   sendGenerationEvent({
     type: 'log',
     level: 'info',
-    message: `Gestuurde boringen: proyecto ${result.projectLabel}. Referencias detectadas: ${result.referenceCount}. Emparejadas: ${result.matchedCount}. Archivos renombrados: ${result.renamedFileCount}. Textos actualizados: ${result.updatedTextCount}.\n`
+    message: `Gestuurde boringen: proyecto ${result.projectLabel}. Referencias detectadas: ${result.referenceCount}. Emparejadas: ${result.matchedCount}. Ya normalizadas: ${result.existingMatchedCount ?? 0}. Accionables: ${result.actionableCount ?? result.matchedCount}. Archivos renombrados: ${result.renamedFileCount}. Textos actualizados: ${result.updatedTextCount}.\n`
   });
 
   if (Array.isArray(result.unmatchedFiles) && result.unmatchedFiles.length > 0) {
@@ -4708,11 +4708,18 @@ ipcMain.handle('dwg:create-gestuurde-boringen', async (_event, payload) => {
     });
   }
 
-  sendGenerationEvent({
-    type: 'log',
-    level: 'info',
-    message: `Registro de conversiones guardado en ${result.logPath}\n`
-  });
+  if (result.logPath) {
+    sendGenerationEvent({
+      type: 'log', level: 'info',
+      message: `Registro de conversiones guardado en ${result.logPath}\n`
+    });
+  }
+  else {
+    sendGenerationEvent({
+      type: 'log', level: 'info',
+      message: 'No hay nuevas conversiones: se conservaron las asignaciones existentes.\n'
+    });
+  }
 
   sendGenerationEvent({
     type: 'status',

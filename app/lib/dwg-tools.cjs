@@ -1982,6 +1982,15 @@ function sortBoringReference(left, right) {
   return String(left.text ?? '').localeCompare(String(right.text ?? ''));
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getNormalizedBoringNumber(fileName, projectLabel) {
+  const match = new RegExp(`^${escapeRegExp(projectLabel)}-Boring(\\d+)\\.dwg$`, 'i').exec(String(fileName ?? ''));
+  return match ? Number(match[1]) : null;
+}
+
 async function getBoringDwgFiles(projectFolderPath) {
   const boringFolderPath = path.join(projectFolderPath, 'Boringen');
   if (!(await pathExists(boringFolderPath))) {
@@ -2126,6 +2135,22 @@ function buildBoringRenamePlan({ projectLabel, references, boringFiles }) {
     filesByKey.set(file.matchKey, file);
   }
 
+  const normalizedFileNumbers = new Map();
+  const filesByNumber = new Map();
+  for (const file of boringFiles) {
+    const number = getNormalizedBoringNumber(file.name, projectLabel);
+    if (!Number.isFinite(number)) continue;
+    normalizedFileNumbers.set(file.fullPath, number);
+    const files = filesByNumber.get(number) ?? [];
+    files.push(file.name);
+    filesByNumber.set(number, files);
+  }
+
+  const duplicateNumbers = [...filesByNumber.entries()].filter(([, files]) => files.length > 1);
+  if (duplicateNumbers.length > 0) {
+    throw new Error(`Hay DWG de Boringen con numeracion existente duplicada: ${duplicateNumbers.map(([number, files]) => `${String(number).padStart(2, '0')} (${files.join(', ')})`).join('; ')}.`);
+  }
+
   if (duplicateFileKeys.size > 0) {
     throw new Error(`Hay DWG de Boringen con nombres ambiguos o duplicados: ${[...duplicateFileKeys].join(', ')}.`);
   }
@@ -2150,8 +2175,26 @@ function buildBoringRenamePlan({ projectLabel, references, boringFiles }) {
 
   const boringFolderPath = boringFiles.length > 0 ? path.dirname(boringFiles[0].fullPath) : null;
   const usedTargetNames = new Set();
-  const items = matched.map((item, index) => {
-    const number = String(index + 1).padStart(2, '0');
+  const existingItems = [];
+  const items = [];
+  let nextNumber = Math.max(0, ...normalizedFileNumbers.values()) + 1;
+
+  for (const item of matched) {
+    const existingNumber = normalizedFileNumbers.get(item.file.fullPath);
+    if (Number.isFinite(existingNumber)) {
+      // Existing normalized files and drawing text are authoritative on reruns.
+      existingItems.push({
+        boringNumber: existingNumber,
+        handle: item.handle, oldText: item.text, newText: item.text,
+        oldFileName: item.file.name, newFileName: item.file.name,
+        sourcePath: item.file.fullPath, targetPath: item.file.fullPath,
+        x: item.x, y: item.y, z: item.z, entityType: item.entityType,
+        needsFileRename: false, needsTextUpdate: false
+      });
+      continue;
+    }
+
+    const number = String(nextNumber++).padStart(2, '0');
     const newName = `${projectLabel}-Boring${number}.dwg`;
     const targetPath = path.join(boringFolderPath, newName);
     const sourcePath = item.file.fullPath;
@@ -2163,7 +2206,8 @@ function buildBoringRenamePlan({ projectLabel, references, boringFiles }) {
     }
     usedTargetNames.add(newName.toLowerCase());
 
-    return {
+    items.push({
+      boringNumber: Number(number),
       handle: item.handle,
       oldText: item.text,
       newText: newName,
@@ -2177,8 +2221,8 @@ function buildBoringRenamePlan({ projectLabel, references, boringFiles }) {
       entityType: item.entityType,
       needsFileRename,
       needsTextUpdate
-    };
-  });
+    });
+  }
 
   const unmatchedFiles = boringFiles
     .filter((file) => file.matchKey && !usedFileKeys.has(file.matchKey))
@@ -2187,6 +2231,8 @@ function buildBoringRenamePlan({ projectLabel, references, boringFiles }) {
 
   return {
     items,
+    existingItems,
+    matchedCount: matched.length,
     unmatchedReferences,
     unmatchedFiles
   };
@@ -2338,7 +2384,7 @@ async function writeBoringRenameLog({ projectFolderPath, dwgPath, boringFolderPa
 
   for (const [index, item] of items.entries()) {
     lines.push('---');
-    lines.push(`Orden=${index + 1}`);
+    lines.push(`Orden=${item.boringNumber ?? index + 1}`);
     lines.push(`Handle=${item.handle}`);
     lines.push(`X=${item.x}`);
     lines.push(`Y=${item.y}`);
@@ -2380,8 +2426,21 @@ async function createGestuurdeBoringen(projectFolderPath, options = {}) {
     boringFiles
   });
 
-  if (plan.items.length === 0) {
+  if (plan.matchedCount === 0) {
     throw new Error('No se ha podido emparejar ninguna referencia del DWG con archivos dentro de Boringen.');
+  }
+
+  const boringFolderPath = path.dirname(boringFiles[0].fullPath);
+  if (plan.items.length === 0) {
+    return {
+      projectLabel, dwgPath: extraction.dwgPath, boringFolderPath, logPath: null,
+      referenceCount: extraction.references.length, matchedCount: plan.matchedCount,
+      existingMatchedCount: plan.existingItems.length, actionableCount: 0,
+      renamedFileCount: 0, updatedTextCount: 0,
+      unmatchedFiles: plan.unmatchedFiles,
+      unmatchedReferences: plan.unmatchedReferences.map((item) => item.text),
+      usedOpenDocument: extraction.usedOpenDocument, accoreConsolePath: extraction.accoreConsolePath
+    };
   }
 
   await assertBoringRenameTargetsAvailable(plan.items);
@@ -2391,32 +2450,40 @@ async function createGestuurdeBoringen(projectFolderPath, options = {}) {
   }
 
   const renamedItems = await renameBoringFiles(plan.items);
+  const textItems = plan.items.filter((item) => item.needsTextUpdate);
+  let textUpdateAttempted = false;
   try {
-    const applyResult = await applyBoringTextRenames({
-      projectFolderPath: resolvedProjectFolder,
-      dwgPath: extraction.dwgPath,
-      items: plan.items,
-      options
-    });
+    let applyResult = { usedOpenDocument: false, accoreConsolePath: null, updatedTextCount: 0 };
+    if (textItems.length > 0) {
+      textUpdateAttempted = true;
+      applyResult = await applyBoringTextRenames({
+        projectFolderPath: resolvedProjectFolder,
+        dwgPath: extraction.dwgPath,
+        items: textItems,
+        options
+      });
+    }
 
-    if (applyResult.updatedTextCount < plan.items.length) {
-      throw new Error(`AutoCAD solo ha actualizado ${applyResult.updatedTextCount} referencias de ${plan.items.length}.`);
+    if (applyResult.updatedTextCount < textItems.length) {
+      throw new Error(`AutoCAD solo ha actualizado ${applyResult.updatedTextCount} referencias de ${textItems.length}.`);
     }
 
     const logPath = await writeBoringRenameLog({
       projectFolderPath: resolvedProjectFolder,
       dwgPath: extraction.dwgPath,
-      boringFolderPath: path.dirname(boringFiles[0].fullPath),
+      boringFolderPath,
       items: plan.items
     });
 
     return {
       projectLabel,
       dwgPath: extraction.dwgPath,
-      boringFolderPath: path.dirname(boringFiles[0].fullPath),
+      boringFolderPath,
       logPath,
       referenceCount: extraction.references.length,
-      matchedCount: plan.items.length,
+      matchedCount: plan.matchedCount,
+      existingMatchedCount: plan.existingItems.length,
+      actionableCount: plan.items.length,
       renamedFileCount: renamedItems.length,
       updatedTextCount: applyResult.updatedTextCount,
       unmatchedFiles: plan.unmatchedFiles,
@@ -2426,6 +2493,18 @@ async function createGestuurdeBoringen(projectFolderPath, options = {}) {
     };
   }
   catch (error) {
+    if (textUpdateAttempted) {
+      try {
+        await applyBoringTextRenames({
+          projectFolderPath: resolvedProjectFolder,
+          dwgPath: extraction.dwgPath,
+          items: textItems.map((item) => ({ ...item, newText: item.oldText })),
+          options
+        });
+      }
+      catch {
+      }
+    }
     await rollbackBoringRenames(renamedItems);
     throw error;
   }
@@ -3878,7 +3957,8 @@ module.exports = {
     parseMantelbuisExport,
     parseMantelbuisRows,
     parseMissingRoleCoordinatesFromCheckHtml,
-    parseRoutingProblemLabelsFromCheckHtml
+    parseRoutingProblemLabelsFromCheckHtml,
+    buildBoringRenamePlan
   },
   addMissingRolesFromCheck,
   clearCrossingDpInDwg,

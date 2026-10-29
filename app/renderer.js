@@ -1459,7 +1459,7 @@ async function createGestuurdeBoringen() {
   await runProjectTool({
     startMessage: 'Creando gestuurde boringen desde DWG y carpeta Boringen...',
     successMessage: (result) => `Boringen creados: ${result.renamedFileCount} archivos y ${result.updatedTextCount} referencias actualizadas.`,
-    successLog: (result) => `Gestuurde boringen completado. Referencias detectadas: ${result.referenceCount}. Emparejadas: ${result.matchedCount}. Archivos renombrados: ${result.renamedFileCount}. Textos actualizados: ${result.updatedTextCount}. TXT: ${result.logPath}. Sin archivo: ${(result.unmatchedReferences ?? []).length}. Archivos sin referencia: ${(result.unmatchedFiles ?? []).length}.`,
+    successLog: (result) => `Gestuurde boringen completado. Referencias detectadas: ${result.referenceCount}. Emparejadas: ${result.matchedCount}. Ya normalizadas: ${result.existingMatchedCount ?? 0}. Archivos renombrados: ${result.renamedFileCount}. Textos actualizados: ${result.updatedTextCount}.${result.logPath ? ` TXT: ${result.logPath}.` : ' Sin nuevas conversiones.'} Sin archivo: ${(result.unmatchedReferences ?? []).length}. Archivos sin referencia: ${(result.unmatchedFiles ?? []).length}.`,
     action: (payload) => fiberDesktopApi.createGestuurdeBoringen(payload)
   });
 }
