@@ -1248,7 +1248,10 @@ async function createMantelbuis(projectFolderPath, options = {}) {
       if (!boring.rows.some((row) => sameGeometry(record, row)) && !unresolved.some((item) => sameGeometry(record, item))) unresolved.push(record);
     }
     return { dwgPath, convertedCount: Number(progress.match(/FMDB_RESULT:CONVERTED=(\d+)/i)?.[1] ?? 0), restoredCount: Number(progress.match(/FMDB_RESULT:RESTORED=(\d+)/i)?.[1] ?? 0), reviewCount: 0, reviewItems: [], boringReviewItems: boring.reviewItems, unresolved, rows, cancelled: rows.length === 0 };
-  } finally { await Promise.all([lispFilePath, outputFilePath, progressFilePath, scriptFilePath].map((target) => removeFileIfExists(target))); }
+  } finally {
+    await Promise.all([lispFilePath, outputFilePath, progressFilePath, scriptFilePath]
+      .map((target) => removeFileIfExists(target, { bestEffort: true, retries: 5 })));
+  }
 }
 
 function getAccoreConsolePriority(version) {
@@ -2563,16 +2566,31 @@ async function runProcess(executablePath, args, options = {}) {
   });
 }
 
-async function removeFileIfExists(targetPath) {
+async function removeFileIfExists(targetPath, { bestEffort = false, retries = 0 } = {}) {
   if (!targetPath) {
     return;
   }
 
-  try {
-    await fsp.unlink(targetPath);
-  }
-  catch (error) {
-    if (error?.code !== 'ENOENT') {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await fsp.unlink(targetPath);
+      return;
+    }
+    catch (error) {
+      if (error?.code === 'ENOENT') {
+        return;
+      }
+
+      const temporarilyLocked = ['EBUSY', 'EPERM', 'EACCES'].includes(error?.code);
+      if (temporarilyLocked && attempt < retries) {
+        await new Promise((resolve) => setTimeout(resolve, 100 * (2 ** attempt)));
+        continue;
+      }
+
+      if (bestEffort && temporarilyLocked) {
+        return;
+      }
+
       throw error;
     }
   }

@@ -83,3 +83,9 @@ test('Mantelbuis PowerShell contract applies directly to Mantelbuis and compacts
     assert.match(script, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
 });
+
+test('Mantelbuis cleanup does not turn a completed scan into an EBUSY failure', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'app', 'lib', 'dwg-tools.cjs'), 'utf8');
+  assert.match(source, /removeFileIfExists\(target, \{ bestEffort: true, retries: 5 \}\)/);
+  assert.match(source, /\['EBUSY', 'EPERM', 'EACCES'\]\.includes\(error\?\.code\)/);
+});
