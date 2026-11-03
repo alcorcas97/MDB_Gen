@@ -2570,6 +2570,50 @@ async function promptTextInput(title, message, defaultValue = '') {
   return mainWindow.webContents.executeJavaScript(script, true);
 }
 
+function formatMantelbuisUnresolved(unresolved) {
+  return `Handle: ${unresolved.handle}\nCapa: ${unresolved.layer}\nCoordenadas: (${unresolved.xA}, ${unresolved.yA}) - (${unresolved.xB}, ${unresolved.yB})`;
+}
+
+async function resolveMantelbuisUnresolved(unresolved, { normalizeMaterial, buildRow }) {
+  const confirmedRows = [];
+  const reviewItems = [];
+  for (const item of unresolved) {
+    for (;;) {
+      const suggestion = item.suggestedMaterial;
+      const response = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        title: 'Material dudoso de Mantelbuis',
+        message: 'Confirma el material para esta geometria.',
+        detail: `${formatMantelbuisUnresolved(item)}${suggestion ? `\n\nSugerencia cercana: ${suggestion}` : ''}`,
+        buttons: suggestion ? [`Usar ${suggestion}`, 'Otro...', 'Omitir', 'Cancelar'] : ['Otro...', 'Omitir', 'Cancelar'],
+        defaultId: suggestion ? 0 : 0,
+        cancelId: suggestion ? 3 : 2,
+        noLink: true
+      });
+      const action = suggestion ? ['suggestion', 'other', 'skip', 'cancel'][response.response] : ['other', 'skip', 'cancel'][response.response];
+      if (action === 'cancel') return { cancelled: true, confirmedRows, reviewItems };
+      if (action === 'skip') {
+        reviewItems.push(`MLINE omitida: ${formatMantelbuisUnresolved(item).replace(/\n/g, '; ')}`);
+        break;
+      }
+      let material = suggestion;
+      if (action === 'other') {
+        material = await promptTextInput('Material de Mantelbuis', `${formatMantelbuisUnresolved(item)}\n\nIntroduce un material valido (por ejemplo HDPE 50-Oranje, HDPE50-Zwart o ST110).`, suggestion ?? '');
+        if (material === null) continue;
+      }
+      const normalized = normalizeMaterial(material, { uncertain: true });
+      const row = normalized && buildRow(item, normalized);
+      if (row) {
+        confirmedRows.push(row);
+        sendGenerationEvent({ type: 'log', level: 'info', message: `Mantelbuis confirmado manualmente: ${item.handle} (${item.layer}) = ${row.Soort_Materie}.\n` });
+        break;
+      }
+      await dialog.showMessageBox(mainWindow, { type: 'warning', title: 'Material no valido', message: 'El material indicado no es valido.', detail: 'Usa HDPE, FLEX o ST con un diametro admitido y, opcionalmente, -Zwart, -Oranje o -XXX.', buttons: ['Volver a intentar'], defaultId: 0, noLink: true });
+    }
+  }
+  return { cancelled: false, confirmedRows, reviewItems };
+}
+
 function parseBackboneCableLabelExample(label) {
   const normalized = String(label ?? '').trim().toUpperCase();
   const match = normalized.match(/^(.*-B)(\d+)(-K)(\d+)(-S)(\d+)$/);
@@ -3581,12 +3625,24 @@ ipcMain.handle('dwg:create-mantelbuis', async (_event, payload) => {
   const backup = await backupPrimaryDwg(payload.projectFolderPath, 'Crear Mantelbuis', [workingMdbPath]);
   const assignmentsPath = path.join(os.tmpdir(), `fiber-mantelbuis-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
   try {
-    const { createMantelbuis } = getDwgToolsModule();
+    const { createMantelbuis, _internal } = getDwgToolsModule();
     const result = await createMantelbuis(payload.projectFolderPath, {
       onStage: (stage) => {
         if (String(stage).toLowerCase() === 'scan') sendGenerationEvent({ type: 'status', message: 'Escaneando automaticamente MLINE, polilineas y referencias de boringen...' });
       }
     });
+    const decisions = await resolveMantelbuisUnresolved(result.unresolved ?? [], {
+      normalizeMaterial: _internal.normalizeMantelbuisMaterial,
+      buildRow: _internal.buildManualMantelbuisRow
+    });
+    if (decisions.cancelled) {
+      if (backup) await updateOperationBackup({ projectPath: payload.projectFolderPath, entryId: backup.id, status: 'cancelled', summary: { convertedCount: result.convertedCount } });
+      return { ...result, cancelled: true, mdbPath: workingMdbPath, insertedCount: 0, skippedCount: 0 };
+    }
+    result.rows.push(...decisions.confirmedRows);
+    result.cancelled = result.rows.length === 0;
+    result.reviewItems = decisions.reviewItems;
+    result.reviewCount = decisions.reviewItems.length + (result.boringReviewItems?.length ?? 0);
     if (result.rows.length === 0) {
       if (backup) await updateOperationBackup({ projectPath: payload.projectFolderPath, entryId: backup.id, status: 'cancelled', summary: { convertedCount: result.convertedCount } });
       return { ...result, mdbPath: workingMdbPath, insertedCount: 0, skippedCount: 0 };
@@ -3594,7 +3650,8 @@ ipcMain.handle('dwg:create-mantelbuis', async (_event, payload) => {
 
     await fsp.writeFile(assignmentsPath, JSON.stringify({ rows: result.rows }), 'utf8');
     const applied = await runMdbToolsJson(['-Mode', 'ApplyMantelbuis', '-MdbPath', workingMdbPath, '-AssignmentsPath', assignmentsPath], { skipHistory: true });
-    if (result.reviewCount > 0) sendGenerationEvent({ type: 'log', level: 'warning', message: `Crear Mantelbuis: ${result.reviewCount} elemento(s) requieren revision:\n${result.reviewItems.map((item) => `- ${item}`).join('\n')}\n` });
+    if (result.reviewItems.length > 0) sendGenerationEvent({ type: 'log', level: 'warning', message: `Crear Mantelbuis: ${result.reviewItems.length} elemento(s) omitidos requieren revision:\n${result.reviewItems.map((item) => `- ${item}`).join('\n')}\n` });
+    if (result.boringReviewItems?.length > 0) sendGenerationEvent({ type: 'log', level: 'warning', message: `Crear Mantelbuis: referencias de boring sin resolver (no aplicadas):\n${result.boringReviewItems.map((item) => `- ${item}`).join('\n')}\n` });
     if (backup) await updateOperationBackup({ projectPath: payload.projectFolderPath, entryId: backup.id, status: 'completed', summary: { ...summarizeOperationResult(applied), convertedCount: result.convertedCount } });
     return { ...result, ...applied, mdbPath: workingMdbPath };
   } catch (error) {

@@ -840,6 +840,10 @@ ${buildProgressHelpersLisp(progressFilePath)}
   (setq handle (open fmdb-output-file "a"))
   (if handle (progn (write-line (strcat kind "\t" material "\t" (rtos (car firstPoint) 2 8) "\t" (rtos (cadr firstPoint) 2 8) "\t" (rtos (car lastPoint) 2 8) "\t" (rtos (cadr lastPoint) 2 8)) handle) (close handle) T) nil)
 )
+(defun fmdb-mantelbuis-write-unresolved (handle layer suggestedMaterial firstPoint lastPoint / output)
+  (setq output (open fmdb-output-file "a"))
+  (if output (progn (write-line (strcat "UNRESOLVED\t" (or handle "?") "\t" (or layer "?") "\t" (or suggestedMaterial "") "\t" (rtos (car firstPoint) 2 8) "\t" (rtos (cadr firstPoint) 2 8) "\t" (rtos (car lastPoint) 2 8) "\t" (rtos (cadr lastPoint) 2 8)) output) (close output) T) nil)
+)
 (defun fmdb-mantelbuis-point-list (value / raw)
   (cond
     ((= (type value) 'LIST) value)
@@ -862,7 +866,7 @@ ${buildProgressHelpersLisp(progressFilePath)}
 (defun fmdb-mantelbuis-material (value / normalized)
   (setq normalized (vl-string-translate " -_" "" (strcase (if value value ""))))
   (cond
-    ((member normalized '("HDPE40" "HDPE50" "HDPE63" "HDPE110" "HDPE160" "HDPE200" "FLEX50" "FLEX63" "FLEX110" "FLEX125" "ST63" "ST110" "ST160")) normalized)
+    ((member normalized '("HDPE40" "HDPE50" "HDPE63" "HDPE75" "HDPE110" "HDPE160" "HDPE200" "FLEX50" "FLEX63" "FLEX110" "FLEX125" "ST63" "ST110" "ST160")) normalized)
     (t nil)
   )
 )
@@ -908,11 +912,11 @@ ${buildProgressHelpersLisp(progressFilePath)}
   (while (>= difference pi) (setq difference (- difference pi)))
   (min difference (- pi difference))
 )
-(defun fmdb-mantelbuis-near-material (points texts / firstPoint lastPoint lineAngle candidate distanceValue angleValue scoreValue best bestScore ambiguous)
+(defun fmdb-mantelbuis-near-material (points texts maximumDistance / firstPoint lastPoint lineAngle candidate distanceValue angleValue scoreValue best bestScore ambiguous)
   (setq firstPoint (car points) lastPoint (car (reverse points)) lineAngle (angle firstPoint lastPoint) best nil bestScore nil ambiguous nil)
   (foreach candidate texts
     (setq distanceValue (fmdb-mantelbuis-distance (cadr candidate) firstPoint lastPoint))
-    (if (<= distanceValue 5.0)
+    (if (<= distanceValue maximumDistance)
       (progn
         (setq angleValue (caddr candidate))
         (setq scoreValue (+ distanceValue (if angleValue (* 5.0 (fmdb-mantelbuis-angle-difference lineAngle angleValue)) 2.0)))
@@ -966,7 +970,7 @@ ${buildProgressHelpersLisp(progressFilePath)}
     )
   )
 )
-(defun c:${CREATE_MANTELBUIS_COMMAND_NAME} (/ oldError oldOsMode oldClayer oldFileDia oldCmdEcho oldCmlStyle oldCmlJust oldCmlScale outputHandle selection index entity entityData object objectName text point texts points material converted restored scanned missing ambiguous restoreItems restoreItem)
+(defun c:${CREATE_MANTELBUIS_COMMAND_NAME} (/ oldError oldOsMode oldClayer oldFileDia oldCmdEcho oldCmlStyle oldCmlJust oldCmlScale outputHandle selection index entity entityData object objectName text point texts points material suggestedMaterial converted restored scanned missing ambiguous restoreItems restoreItem)
   (setq oldError *error* oldOsMode (getvar "OSMODE") oldClayer (getvar "CLAYER") oldFileDia (getvar "FILEDIA") oldCmdEcho (getvar "CMDECHO") oldCmlStyle (getvar "CMLSTYLE") oldCmlJust (getvar "CMLJUST") oldCmlScale (getvar "CMLSCALE") converted 0 restored 0 scanned 0 missing 0 ambiguous 0 texts nil restoreItems nil)
   (defun *error* (message)
     (setvar "OSMODE" oldOsMode) (setvar "CLAYER" oldClayer) (setvar "FILEDIA" oldFileDia) (setvar "CMDECHO" oldCmdEcho) (setvar "CMLSTYLE" oldCmlStyle) (setvar "CMLJUST" oldCmlJust) (setvar "CMLSCALE" oldCmlScale)
@@ -1002,13 +1006,17 @@ ${buildProgressHelpersLisp(progressFilePath)}
           (setq material (fmdb-mantelbuis-material (cdr (assoc 8 entityData))))
           (if (= objectName "MLINE") (progn
             (setq scanned (1+ scanned))
-            (if (not material) (setq material (fmdb-mantelbuis-near-material points texts)))
+            (if (not material) (setq material (fmdb-mantelbuis-near-material points texts 5.0)))
             (if material
               (progn
                 (fmdb-mantelbuis-write "DUCT" material (car points) (car (reverse points)))
                 (setq converted (1+ converted))
               )
-              (setq missing (1+ missing))
+              (progn
+                (setq missing (1+ missing))
+                (setq suggestedMaterial (fmdb-mantelbuis-near-material points texts 10.0))
+                (fmdb-mantelbuis-write-unresolved (cdr (assoc 5 entityData)) (cdr (assoc 8 entityData)) suggestedMaterial (car points) (car (reverse points)))
+              )
             )
           ))
           (if (and (not (equal objectName "MLINE")) material) (progn
@@ -1034,25 +1042,36 @@ ${buildProgressHelpersLisp(progressFilePath)}
 `;
 }
 
-function normalizeMantelbuisMaterial(value, { boring = false } = {}) {
-  const material = String(value ?? '').replace(/[\s_-]/g, '').toUpperCase();
-  const match = material.match(/^(HDPE|HPE|FLEX|ST)(40|50|63|110|125|160|200)$/);
+function normalizeMantelbuisMaterial(value, { boring = false, uncertain = false } = {}) {
+  const material = String(value ?? '').trim().toUpperCase();
+  const match = material.replace(/[\s_]/g, '').match(/^(HDPE|HPE|FLEX|ST)(40|50|63|75|110|125|160|200)(?:-?([A-Z]+))?$/);
   if (!match) return null;
   const family = match[1] === 'HPE' ? 'HDPE' : match[1];
   const base = `${family}${match[2]}`;
-  const allowed = new Set(['HDPE40', 'HDPE50', 'HDPE63', 'HDPE110', 'HDPE160', 'HDPE200', 'FLEX50', 'FLEX63', 'FLEX110', 'FLEX125', 'ST63', 'ST110', 'ST160']);
+  const color = match[3] ?? null;
+  const allowed = new Set(['HDPE40', 'HDPE50', 'HDPE63', 'HDPE75', 'HDPE110', 'HDPE160', 'HDPE200', 'FLEX50', 'FLEX63', 'FLEX110', 'FLEX125', 'ST63', 'ST110', 'ST160']);
   if (!allowed.has(base)) return null;
   if (boring && family === 'HDPE') return `${base}-Zwart`;
-  if (family === 'HDPE' || base === 'FLEX50' || base === 'FLEX63') return `${base}-Oranje`;
+  if (color) return `${base}-${['ORANJE', 'ZWART'].includes(color) ? `${color[0]}${color.slice(1).toLowerCase()}` : 'XXX'}`;
+  if (family === 'HDPE') return `${base}-${uncertain ? 'XXX' : 'Oranje'}`;
+  if (base === 'FLEX50' || base === 'FLEX63') return `${base}-Oranje`;
   return base;
 }
 
 function extractBoringMaterial(text) {
   const source = String(text ?? '').toUpperCase();
-  const familyFirst = source.match(/\b(HDPE|HPE|FLEX|ST)\s*[- ]?\s*(40|50|63|110|125|160|200)\b/);
-  if (familyFirst) return normalizeMantelbuisMaterial(`${familyFirst[1]}${familyFirst[2]}`, { boring: true });
-  const diameterFirst = source.match(/(?:Ø|⌀|DIA(?:METER)?\.?\s*)?\s*(40|50|63|110|125|160|200)\s*(HDPE|HPE|FLEX|ST)\b/);
-  return diameterFirst ? normalizeMantelbuisMaterial(`${diameterFirst[2]}${diameterFirst[1]}`, { boring: true }) : null;
+  const materials = [];
+  const add = (family, diameter) => {
+    const material = normalizeMantelbuisMaterial(`${family}${diameter}`, { boring: true });
+    if (material && !materials.includes(material)) materials.push(material);
+  };
+  for (const match of source.matchAll(/\b(HDPE|HPE|FLEX|ST)\s*[- ]?\s*(40|50|63|75|110|125|160|200)\b/g)) add(match[1], match[2]);
+  for (const match of source.matchAll(/(?:%%C|\\U\+2205|Ø|⌀|DIA(?:METER)?\.?\s*)\s*(40|50|63|75|110|125|160|200)\s*(?:MM)?/g)) {
+    const family = source.slice(match.index + match[0].length).match(/^\s*(HDPE|HPE|FLEX|ST)\b/)?.[1]
+      ?? source.match(/\b(HDPE|HPE|FLEX|ST)\b/)?.[1];
+    if (family) add(family, match[1]);
+  }
+  return materials;
 }
 
 function extractBoringCoordinates(text) {
@@ -1072,12 +1091,26 @@ function extractBoringCoordinates(text) {
 function parseMantelbuisExport(text) {
   const records = [];
   for (const line of String(text ?? '').replace(/\r/g, '').split('\n')) {
-    const [kind, value, xA, yA, xB, yB] = line.split('\t');
+    const fields = line.split('\t');
+    const [kind, value, xA, yA, xB, yB] = fields;
+    if (kind === 'UNRESOLVED') {
+      const [handle, layer, suggestedMaterial, unresolvedXA, unresolvedYA, unresolvedXB, unresolvedYB] = fields.slice(1);
+      const values = [unresolvedXA, unresolvedYA, unresolvedXB, unresolvedYB].map(Number);
+      if (values.every(Number.isFinite)) records.push({ kind, handle: normalizeText(handle) ?? '?', layer: normalizeText(layer) ?? '?', suggestedMaterial: normalizeMantelbuisMaterial(suggestedMaterial) ?? null, xA: values[0], yA: values[1], xB: values[2], yB: values[3] });
+      continue;
+    }
     const values = [xA, yA, xB, yB].map(Number);
     if (!['DUCT', 'LINE', 'REFERENCE'].includes(kind) || values.some((item) => !Number.isFinite(item))) continue;
     records.push({ kind, value: normalizeText(value) ?? '', xA: values[0], yA: values[1], xB: values[2], yB: values[3] });
   }
   return records;
+}
+
+function buildManualMantelbuisRow(unresolved, material) {
+  const normalizedMaterial = normalizeMantelbuisMaterial(material, { uncertain: true });
+  const values = [unresolved?.xA, unresolved?.yA, unresolved?.xB, unresolved?.yB].map(Number);
+  if (!normalizedMaterial || values.some((value) => !Number.isFinite(value))) return null;
+  return { X_A: values[0], Y_A: values[1], X_B: values[2], Y_B: values[3], Soort_Materie: normalizedMaterial, Boring_Type: unresolved?.Boring_Type ?? (normalizedMaterial.startsWith('ST') ? 'Persing' : 'Mantelbuis'), Boorprofiel: unresolved?.Boorprofiel ?? '', ImportResult: '' };
 }
 
 function parseMantelbuisRows(text) {
@@ -1105,50 +1138,77 @@ function distanceToSegment(point, line) {
   return Math.hypot(point.xA - (line.xA + (factor * dx)), point.yA - (line.yA + (factor * dy)));
 }
 
+async function readBoringDwgText(dwgPath) {
+  const rootDirectory = path.resolve(__dirname, '..', '..');
+  const wasmDirectory = path.join(rootDirectory, 'node_modules', '@mlightcad', 'libredwg-web', 'wasm') + path.sep;
+  if (!fs.existsSync(wasmDirectory)) return '';
+  try {
+    const database = await withSuppressedConsole(async () => {
+      const libredwg = await LibreDwg.create(wasmDirectory);
+      const dwg = libredwg.dwg_read_data(fs.readFileSync(dwgPath), Dwg_File_Type.DWG);
+      return libredwg.convert(dwg);
+    });
+    return (database?.entities ?? [])
+      .filter((entity) => ['TEXT', 'MTEXT', 'ATTRIB', 'ATTDEF'].includes(String(entity?.type ?? '').toUpperCase()))
+      .map((entity) => normalizeText(entity?.text?.text ?? entity?.text?.value ?? entity?.value ?? entity?.textString ?? (typeof entity?.text === 'string' ? entity.text : null)))
+      .filter(Boolean)
+      .join('\n');
+  }
+  catch {
+    return '';
+  }
+}
+
 async function readBoringPdfDetails(projectFolderPath, boringFileName) {
   const folder = path.join(projectFolderPath, 'Boringen');
   const stem = path.basename(boringFileName, path.extname(boringFileName)).replace(/[^a-z0-9]/gi, '').toLowerCase();
   const entries = await fsp.readdir(folder, { withFileTypes: true }).catch(() => []);
   const pdf = entries.find((entry) => entry.isFile() && path.extname(entry.name).toLowerCase() === '.pdf' && path.basename(entry.name, path.extname(entry.name)).replace(/[^a-z0-9]/gi, '').toLowerCase().includes(stem));
-  if (!pdf) return { material: null, coordinates: null };
-  try {
+  let text = '';
+  if (pdf) try {
     const parser = new PDFParse({ data: await fsp.readFile(path.join(folder, pdf.name)) });
     try {
-      const text = (await parser.getText()).text ?? '';
-      return { material: extractBoringMaterial(text), coordinates: extractBoringCoordinates(text) };
+      text = (await parser.getText()).text ?? '';
     }
     finally { await parser.destroy().catch(() => {}); }
   }
   catch {
-    return { material: null, coordinates: null };
+    text = '';
   }
+  let materials = extractBoringMaterial(text);
+  if (materials.length === 0) materials = extractBoringMaterial(await readBoringDwgText(path.join(folder, boringFileName)));
+  return { materials, coordinates: extractBoringCoordinates(text) };
 }
 
-async function buildBoringRows(projectFolderPath, records) {
+async function buildBoringRows(projectFolderPath, records, { readDetails = readBoringPdfDetails } = {}) {
   const boringFolder = path.join(projectFolderPath, 'Boringen');
   const dwgEntries = await fsp.readdir(boringFolder, { withFileTypes: true }).catch(() => []);
   const boringFiles = dwgEntries.filter((entry) => entry.isFile() && /-Boring\d+\.dwg$/i.test(entry.name));
   const lines = records.filter((record) => record.kind === 'LINE');
   const rows = [];
+  const unresolved = [];
   const reviewItems = [];
   for (const reference of records.filter((record) => record.kind === 'REFERENCE')) {
     const referenceKey = normalizeBoringReference(reference.value);
     const file = boringFiles.find((item) => normalizeBoringReference(item.name) === referenceKey);
     if (!file) { reviewItems.push(`${reference.value}: no coincide con un DWG de Boringen`); continue; }
-    const details = await readBoringPdfDetails(projectFolderPath, file.name);
-    if (!details.material) { reviewItems.push(`${file.name}: el PDF no contiene un material legible automaticamente`); continue; }
+    const details = await readDetails(projectFolderPath, file.name);
     let coordinates = details.coordinates;
     if (!coordinates) {
       const ranked = lines.map((line) => ({ line, distance: distanceToSegment(reference, line) })).filter((item) => item.distance <= 20).sort((left, right) => left.distance - right.distance);
       if (ranked.length === 0 || (ranked[1] && ranked[1].distance <= Math.max(0.25, ranked[0].distance * 1.15))) {
-        reviewItems.push(`${file.name}: el PDF no tiene coordenadas y no hay una geometria unica junto a la referencia`);
+        reviewItems.push(`${file.name}: ${details.materials.length === 0 ? 'no contiene un material legible ni una geometria unica' : 'el PDF no tiene coordenadas y no hay una geometria unica junto a la referencia'}`);
         continue;
       }
       coordinates = { X_A: ranked[0].line.xA, Y_A: ranked[0].line.yA, X_B: ranked[0].line.xB, Y_B: ranked[0].line.yB };
     }
-    rows.push({ ...coordinates, Soort_Materie: details.material, Boring_Type: 'Gestuurde Boring', Boorprofiel: file.name, ImportResult: '' });
+    if (details.materials.length === 0) {
+      unresolved.push({ kind: 'UNRESOLVED', handle: file.name, layer: `Boring: ${reference.value}`, suggestedMaterial: null, xA: coordinates.X_A, yA: coordinates.Y_A, xB: coordinates.X_B, yB: coordinates.Y_B, Boring_Type: 'Gestuurde Boring', Boorprofiel: file.name });
+      continue;
+    }
+    for (const material of details.materials) rows.push({ ...coordinates, Soort_Materie: material, Boring_Type: 'Gestuurde Boring', Boorprofiel: file.name, ImportResult: '' });
   }
-  return { rows, reviewItems };
+  return { rows, unresolved, reviewItems };
 }
 
 async function createMantelbuis(projectFolderPath, options = {}) {
@@ -1174,12 +1234,20 @@ async function createMantelbuis(projectFolderPath, options = {}) {
     const records = parseMantelbuisExport(exportText);
     const boring = await buildBoringRows(projectFolderPath, records);
     const rows = [...parseMantelbuisRows(exportText), ...boring.rows];
-    const unresolvedGeometryCount = Number(progress.match(/FMDB_RESULT:REVIEW=(\d+)/i)?.[1] ?? 0);
-    const reviewItems = [
-      ...(unresolvedGeometryCount > 0 ? [`${unresolvedGeometryCount} MLINE sin material unico a menos de 5 m`] : []),
-      ...boring.reviewItems
-    ];
-    return { dwgPath, convertedCount: Number(progress.match(/FMDB_RESULT:CONVERTED=(\d+)/i)?.[1] ?? 0), restoredCount: Number(progress.match(/FMDB_RESULT:RESTORED=(\d+)/i)?.[1] ?? 0), reviewCount: unresolvedGeometryCount + boring.reviewItems.length, reviewItems, rows, cancelled: rows.length === 0 };
+    const sameGeometry = (record, row) => {
+      const same = (firstX, firstY, secondX, secondY) => Math.hypot(firstX - secondX, firstY - secondY) <= 0.01;
+      const xA = row.xA ?? row.X_A;
+      const yA = row.yA ?? row.Y_A;
+      const xB = row.xB ?? row.X_B;
+      const yB = row.yB ?? row.Y_B;
+      return (same(record.xA, record.yA, xA, yA) && same(record.xB, record.yB, xB, yB))
+        || (same(record.xA, record.yA, xB, yB) && same(record.xB, record.yB, xA, yA));
+    };
+    const unresolved = [...boring.unresolved];
+    for (const record of records.filter((item) => item.kind === 'UNRESOLVED')) {
+      if (!boring.rows.some((row) => sameGeometry(record, row)) && !unresolved.some((item) => sameGeometry(record, item))) unresolved.push(record);
+    }
+    return { dwgPath, convertedCount: Number(progress.match(/FMDB_RESULT:CONVERTED=(\d+)/i)?.[1] ?? 0), restoredCount: Number(progress.match(/FMDB_RESULT:RESTORED=(\d+)/i)?.[1] ?? 0), reviewCount: 0, reviewItems: [], boringReviewItems: boring.reviewItems, unresolved, rows, cancelled: rows.length === 0 };
   } finally { await Promise.all([lispFilePath, outputFilePath, progressFilePath, scriptFilePath].map((target) => removeFileIfExists(target))); }
 }
 
@@ -4514,9 +4582,12 @@ module.exports = {
     buildCrossingDpGroups,
     buildCrossingDpLisp,
     buildCreateMantelbuisLisp,
+    buildBoringRows,
+    buildManualMantelbuisRow,
     extractBoringCoordinates,
     extractBoringMaterial,
     normalizeMantelbuisMaterial,
+    readBoringPdfDetails,
     parseMantelbuisExport,
     parseMantelbuisRows,
     parseMissingRoleCoordinatesFromCheckHtml,
