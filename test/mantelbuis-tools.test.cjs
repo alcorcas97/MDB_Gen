@@ -11,6 +11,7 @@ test('Mantelbuis LISP exports endpoints and restores material polylines as DRILL
     assert.match(lisp, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.doesNotMatch(lisp, /\bentsel\b/i);
+  assert.doesNotMatch(lisp, /\(or (?:handle|layer|suggestedMaterial) /);
 });
 
 test('Mantelbuis parser normalizes materials, assigns boring type and deduplicates reversed millimetric geometry', () => {

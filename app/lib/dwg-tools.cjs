@@ -842,7 +842,7 @@ ${buildProgressHelpersLisp(progressFilePath)}
 )
 (defun fmdb-mantelbuis-write-unresolved (handle layer suggestedMaterial firstPoint lastPoint / output)
   (setq output (open fmdb-output-file "a"))
-  (if output (progn (write-line (strcat "UNRESOLVED\t" (or handle "?") "\t" (or layer "?") "\t" (or suggestedMaterial "") "\t" (rtos (car firstPoint) 2 8) "\t" (rtos (cadr firstPoint) 2 8) "\t" (rtos (car lastPoint) 2 8) "\t" (rtos (cadr lastPoint) 2 8)) output) (close output) T) nil)
+  (if output (progn (write-line (strcat "UNRESOLVED\t" (if handle handle "?") "\t" (if layer layer "?") "\t" (if suggestedMaterial suggestedMaterial "") "\t" (rtos (car firstPoint) 2 8) "\t" (rtos (cadr firstPoint) 2 8) "\t" (rtos (car lastPoint) 2 8) "\t" (rtos (cadr lastPoint) 2 8)) output) (close output) T) nil)
 )
 (defun fmdb-mantelbuis-point-list (value / raw)
   (cond
