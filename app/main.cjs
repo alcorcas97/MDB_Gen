@@ -2574,41 +2574,70 @@ function formatMantelbuisUnresolved(unresolved) {
   return `Handle: ${unresolved.handle}\nCapa: ${unresolved.layer}\nCoordenadas: (${unresolved.xA}, ${unresolved.yA}) - (${unresolved.xB}, ${unresolved.yB})`;
 }
 
-async function resolveMantelbuisUnresolved(unresolved, { normalizeMaterial, buildRow }) {
+async function resolveMantelbuisUnresolved(unresolved, { normalizeMaterial, buildRow, dwgPath, setEntityHighlight }) {
   const confirmedRows = [];
   const reviewItems = [];
   for (const item of unresolved) {
-    for (;;) {
-      const suggestion = item.suggestedMaterial;
-      const response = await dialog.showMessageBox(mainWindow, {
-        type: 'warning',
-        title: 'Material dudoso de Mantelbuis',
-        message: 'Confirma el material para esta geometria.',
-        detail: `${formatMantelbuisUnresolved(item)}${suggestion ? `\n\nSugerencia cercana: ${suggestion}` : ''}`,
-        buttons: suggestion ? [`Usar ${suggestion}`, 'Otro...', 'Omitir', 'Cancelar'] : ['Otro...', 'Omitir', 'Cancelar'],
-        defaultId: suggestion ? 0 : 0,
-        cancelId: suggestion ? 3 : 2,
-        noLink: true
-      });
-      const action = suggestion ? ['suggestion', 'other', 'skip', 'cancel'][response.response] : ['other', 'skip', 'cancel'][response.response];
-      if (action === 'cancel') return { cancelled: true, confirmedRows, reviewItems };
-      if (action === 'skip') {
-        reviewItems.push(`MLINE omitida: ${formatMantelbuisUnresolved(item).replace(/\n/g, '; ')}`);
-        break;
+    let highlighted = false;
+    try {
+      if (typeof setEntityHighlight === 'function') {
+        try {
+          const result = await setEntityHighlight(dwgPath, item.handle, true);
+          highlighted = result?.highlighted === true;
+          if (!highlighted) {
+            sendGenerationEvent({ type: 'log', level: 'warning', message: `No se ha podido resaltar temporalmente Mantelbuis ${item.handle}: ${result?.reason ?? 'sin detalle'}. Se mantiene la decision manual.\n` });
+          }
+        }
+        catch (error) {
+          sendGenerationEvent({ type: 'log', level: 'warning', message: `No se ha podido resaltar temporalmente Mantelbuis ${item.handle}: ${String(error?.message ?? error)}. Se mantiene la decision manual.\n` });
+        }
       }
-      let material = suggestion;
-      if (action === 'other') {
-        material = await promptTextInput('Material de Mantelbuis', `${formatMantelbuisUnresolved(item)}\n\nIntroduce un material valido (por ejemplo HDPE 50-Oranje, HDPE50-Zwart o ST110).`, suggestion ?? '');
-        if (material === null) continue;
+      for (;;) {
+        const suggestion = item.suggestedMaterial;
+        const dialogOptions = {
+          type: 'warning',
+          title: 'Material dudoso de Mantelbuis',
+          message: 'Confirma el material para esta geometria.',
+          detail: `${formatMantelbuisUnresolved(item)}${highlighted ? '\n\nEsta entidad esta resaltada temporalmente en AutoCAD.' : ''}${suggestion ? `\n\nSugerencia cercana: ${suggestion}` : ''}`,
+          buttons: suggestion ? [`Usar ${suggestion}`, 'Otro...', 'Omitir', 'Cancelar'] : ['Otro...', 'Omitir', 'Cancelar'],
+          defaultId: suggestion ? 0 : 0,
+          cancelId: suggestion ? 3 : 2,
+          noLink: true
+        };
+        const response = highlighted
+          ? await dialog.showMessageBox(dialogOptions)
+          : await dialog.showMessageBox(mainWindow, dialogOptions);
+        const action = suggestion ? ['suggestion', 'other', 'skip', 'cancel'][response.response] : ['other', 'skip', 'cancel'][response.response];
+        if (action === 'cancel') return { cancelled: true, confirmedRows, reviewItems };
+        if (action === 'skip') {
+          reviewItems.push(`MLINE omitida: ${formatMantelbuisUnresolved(item).replace(/\n/g, '; ')}`);
+          break;
+        }
+        let material = suggestion;
+        if (action === 'other') {
+          material = await promptTextInput('Material de Mantelbuis', `${formatMantelbuisUnresolved(item)}\n\nIntroduce un material valido (por ejemplo HDPE 50-Oranje, HDPE50-Zwart o ST110).`, suggestion ?? '');
+          if (material === null) continue;
+        }
+        const normalized = normalizeMaterial(material, { uncertain: true });
+        const row = normalized && buildRow(item, normalized);
+        if (row) {
+          confirmedRows.push(row);
+          sendGenerationEvent({ type: 'log', level: 'info', message: `Mantelbuis confirmado manualmente: ${item.handle} (${item.layer}) = ${row.Soort_Materie}.\n` });
+          break;
+        }
+        await dialog.showMessageBox(mainWindow, { type: 'warning', title: 'Material no valido', message: 'El material indicado no es valido.', detail: 'Usa HDPE, FLEX o ST con un diametro admitido y, opcionalmente, -Zwart, -Oranje o -XXX.', buttons: ['Volver a intentar'], defaultId: 0, noLink: true });
       }
-      const normalized = normalizeMaterial(material, { uncertain: true });
-      const row = normalized && buildRow(item, normalized);
-      if (row) {
-        confirmedRows.push(row);
-        sendGenerationEvent({ type: 'log', level: 'info', message: `Mantelbuis confirmado manualmente: ${item.handle} (${item.layer}) = ${row.Soort_Materie}.\n` });
-        break;
+    }
+    finally {
+      if (typeof setEntityHighlight === 'function') {
+        try {
+          const result = await setEntityHighlight(dwgPath, item.handle, false);
+          if (!result?.cleared) sendGenerationEvent({ type: 'log', level: 'warning', message: `No se ha podido limpiar el resaltado temporal de Mantelbuis ${item.handle}: ${result?.reason ?? 'sin detalle'}.\n` });
+        }
+        catch (error) {
+          sendGenerationEvent({ type: 'log', level: 'warning', message: `No se ha podido limpiar el resaltado temporal de Mantelbuis ${item.handle}: ${String(error?.message ?? error)}.\n` });
+        }
       }
-      await dialog.showMessageBox(mainWindow, { type: 'warning', title: 'Material no valido', message: 'El material indicado no es valido.', detail: 'Usa HDPE, FLEX o ST con un diametro admitido y, opcionalmente, -Zwart, -Oranje o -XXX.', buttons: ['Volver a intentar'], defaultId: 0, noLink: true });
     }
   }
   return { cancelled: false, confirmedRows, reviewItems };
@@ -3625,7 +3654,7 @@ ipcMain.handle('dwg:create-mantelbuis', async (_event, payload) => {
   const backup = await backupPrimaryDwg(payload.projectFolderPath, 'Crear Mantelbuis', [workingMdbPath]);
   const assignmentsPath = path.join(os.tmpdir(), `fiber-mantelbuis-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
   try {
-    const { createMantelbuis, _internal } = getDwgToolsModule();
+    const { createMantelbuis, setMantelbuisEntityHighlight, _internal } = getDwgToolsModule();
     const result = await createMantelbuis(payload.projectFolderPath, {
       onStage: (stage) => {
         if (String(stage).toLowerCase() === 'scan') sendGenerationEvent({ type: 'status', message: 'Escaneando automaticamente MLINE, polilineas y referencias de boringen...' });
@@ -3633,7 +3662,9 @@ ipcMain.handle('dwg:create-mantelbuis', async (_event, payload) => {
     });
     const decisions = await resolveMantelbuisUnresolved(result.unresolved ?? [], {
       normalizeMaterial: _internal.normalizeMantelbuisMaterial,
-      buildRow: _internal.buildManualMantelbuisRow
+      buildRow: _internal.buildManualMantelbuisRow,
+      dwgPath: result.dwgPath,
+      setEntityHighlight: setMantelbuisEntityHighlight
     });
     if (decisions.cancelled) {
       if (backup) await updateOperationBackup({ projectPath: payload.projectFolderPath, entryId: backup.id, status: 'cancelled', summary: { convertedCount: result.convertedCount } });

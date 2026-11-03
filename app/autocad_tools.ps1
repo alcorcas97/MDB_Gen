@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('RunOpenDocumentCommand', 'PickPointOnOpenDocument')]
+    [ValidateSet('RunOpenDocumentCommand', 'PickPointOnOpenDocument', 'SetEntityHighlight')]
     [string]$Mode,
 
     [Parameter(Mandatory = $true)]
@@ -13,6 +13,9 @@ param(
     [string]$ProgressPath,
     [string]$OutputPath,
     [string]$PromptText,
+    [string]$EntityHandle,
+    [switch]$Enabled,
+    [switch]$Disable,
     [int]$TimeoutSeconds = 600,
     [switch]$SaveDocument
 )
@@ -127,7 +130,8 @@ function Send-DocumentCommand {
 function Focus-AutoCadWindow {
     param(
         [__ComObject]$Application,
-        [__ComObject]$Document
+        [__ComObject]$Document,
+        [int]$WaitMilliseconds = 600
     )
 
     try {
@@ -160,7 +164,9 @@ function Focus-AutoCadWindow {
         else {
             [void]$shell.AppActivate('AutoCAD')
         }
-        Start-Sleep -Milliseconds 600
+        if ($WaitMilliseconds -gt 0) {
+            Start-Sleep -Milliseconds $WaitMilliseconds
+        }
     }
     catch {
     }
@@ -399,6 +405,99 @@ switch ($Mode) {
             } | ConvertTo-Json -Compress
         }
         finally {
+            if ($null -ne $document) {
+                [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($document)
+            }
+
+            if ($null -ne $application) {
+                [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($application)
+            }
+        }
+    }
+
+    'SetEntityHighlight' {
+        $resolvedDwgPath = Resolve-NormalizedPath $DwgPath
+        if ([string]::IsNullOrWhiteSpace($EntityHandle) -or ($Enabled -and $Disable) -or (-not $Enabled -and -not $Disable)) {
+            [pscustomobject]@{
+                handled     = $false
+                applied     = $false
+                highlighted = $false
+                cleared     = $false
+                reason      = 'InvalidHighlightRequest'
+            } | ConvertTo-Json -Compress
+            return
+        }
+
+        $application = Get-ActiveAutoCadApplication
+        if ($null -eq $application) {
+            [pscustomobject]@{
+                handled     = $false
+                applied     = $false
+                highlighted = $false
+                cleared     = $false
+                reason      = 'AutoCADNotRunning'
+            } | ConvertTo-Json -Compress
+            return
+        }
+
+        $document = $null
+        $entity = $null
+        try {
+            $document = Get-OpenDocumentByPath -Application $application -TargetPath $resolvedDwgPath
+            if ($null -eq $document) {
+                [pscustomobject]@{
+                    handled     = $false
+                    applied     = $false
+                    highlighted = $false
+                    cleared     = $false
+                    reason      = 'DocumentNotOpen'
+                } | ConvertTo-Json -Compress
+                return
+            }
+
+            $document.Activate()
+            Focus-AutoCadWindow -Application $application -Document $document -WaitMilliseconds 0
+
+            try {
+                $entity = $document.HandleToObject($EntityHandle.Trim())
+            }
+            catch {
+                [pscustomobject]@{
+                    handled     = $true
+                    applied     = $false
+                    highlighted = $false
+                    cleared     = $false
+                    reason      = 'EntityNotFound'
+                } | ConvertTo-Json -Compress
+                return
+            }
+
+            try {
+                $entity.Highlight([bool]$Enabled)
+                $entity.Update()
+                [pscustomobject]@{
+                    handled     = $true
+                    applied     = $true
+                    highlighted = [bool]$Enabled
+                    cleared     = [bool]$Disable
+                    reason      = $null
+                } | ConvertTo-Json -Compress
+            }
+            catch {
+                [pscustomobject]@{
+                    handled     = $true
+                    applied     = $false
+                    highlighted = $false
+                    cleared     = $false
+                    reason      = ('HighlightFailed: ' + $_.Exception.Message)
+                } | ConvertTo-Json -Compress
+            }
+        }
+        finally {
+            if ($null -ne $entity) {
+                [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($entity)
+            }
+
             if ($null -ne $document) {
                 [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($document)
             }

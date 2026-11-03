@@ -90,3 +90,26 @@ test('Mantelbuis cleanup does not turn a completed scan into an EBUSY failure', 
   assert.match(source, /removeFileIfExists\(target, \{ bestEffort: true, retries: 5 \}\)/);
   assert.match(source, /\['EBUSY', 'EPERM', 'EACCES'\]\.includes\(error\?\.code\)/);
 });
+
+test('Mantelbuis highlight uses direct AutoCAD COM without sending a command or waiting for quiescence', () => {
+  const toolsSource = fs.readFileSync(path.join(__dirname, '..', 'app', 'lib', 'dwg-tools.cjs'), 'utf8');
+  const autoCadScript = fs.readFileSync(path.join(__dirname, '..', 'app', 'autocad_tools.ps1'), 'utf8');
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'app', 'main.cjs'), 'utf8');
+  const highlightFunction = toolsSource.slice(toolsSource.indexOf('async function setMantelbuisEntityHighlight'), toolsSource.indexOf('function normalizeMantelbuisMaterial'));
+  const highlightMode = autoCadScript.slice(autoCadScript.indexOf("'SetEntityHighlight' {"));
+
+  assert.match(autoCadScript, /ValidateSet\('RunOpenDocumentCommand', 'PickPointOnOpenDocument', 'SetEntityHighlight'\)/);
+  for (const token of ['$EntityHandle', '$Enabled', '$Disable', '$document.Activate()', 'Focus-AutoCadWindow -Application $application -Document $document -WaitMilliseconds 0', '$document.HandleToObject($EntityHandle.Trim())', '$entity.Highlight([bool]$Enabled)', '$entity.Update()', 'handled', 'applied', 'highlighted', 'cleared', 'EntityNotFound']) {
+    assert.match(highlightMode, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  assert.doesNotMatch(highlightMode, /Send-DocumentCommand|Wait-ForDocumentCommand|\.Save\(\)|sssetfirst|handent/i);
+  assert.match(highlightFunction, /runPowerShellFile\(autocadToolsScriptPath/);
+  assert.match(highlightFunction, /'SetEntityHighlight'/);
+  assert.match(highlightFunction, /enabled \? '-Enabled' : '-Disable'/);
+  assert.match(highlightFunction, /timeoutMs: options\.timeoutMs \?\? 10000/);
+  assert.doesNotMatch(highlightFunction, /tryRunCommandOnOpenDocument|buildMantelbuisEntityHighlightLisp|\.lsp|progressFilePath|AccoreConsole/);
+  assert.match(mainSource, /await setEntityHighlight\(dwgPath, item\.handle, true\)/);
+  assert.match(mainSource, /finally \{\s*if \(typeof setEntityHighlight === 'function'\)[\s\S]*await setEntityHighlight\(dwgPath, item\.handle, false\)/);
+  assert.match(mainSource, /Esta entidad esta resaltada temporalmente en AutoCAD\./);
+  assert.match(mainSource, /highlighted\s*\? await dialog\.showMessageBox\(dialogOptions\)/);
+});

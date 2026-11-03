@@ -1042,6 +1042,41 @@ ${buildProgressHelpersLisp(progressFilePath)}
 `;
 }
 
+async function setMantelbuisEntityHighlight(dwgPath, handle, enabled, options = {}) {
+  const normalizedHandle = String(handle ?? '').trim();
+  if (!dwgPath || !normalizedHandle) {
+    return { handled: false, applied: false, highlighted: false, cleared: false, reason: 'invalid handle or DWG path' };
+  }
+
+  try {
+    const result = await runPowerShellFile(autocadToolsScriptPath, [
+      '-Mode',
+      'SetEntityHighlight',
+      '-DwgPath',
+      dwgPath,
+      '-EntityHandle',
+      normalizedHandle,
+      enabled ? '-Enabled' : '-Disable'
+    ], {
+      timeoutMs: options.timeoutMs ?? 10000
+    });
+    const response = parsePowerShellJsonOutput(result.stdout);
+    if (!response) {
+      return { handled: false, applied: false, highlighted: false, cleared: false, reason: 'NoHelperResult' };
+    }
+    return {
+      handled: response.handled === true,
+      applied: response.applied === true,
+      highlighted: response.highlighted === true,
+      cleared: response.cleared === true,
+      reason: response.reason ?? null
+    };
+  }
+  catch (error) {
+    return { handled: false, applied: false, highlighted: false, cleared: false, reason: String(error?.message ?? error) };
+  }
+}
+
 function normalizeMantelbuisMaterial(value, { boring = false, uncertain = false } = {}) {
   const material = String(value ?? '').trim().toUpperCase();
   const match = material.replace(/[\s_]/g, '').match(/^(HDPE|HPE|FLEX|ST)(40|50|63|75|110|125|160|200)(?:-?([A-Z]+))?$/);
@@ -4630,5 +4665,6 @@ module.exports = {
   placePhktTextsAtAccessnetVertices,
   pickPointFromOpenDocument,
   removeExtraRolesFromCheck,
+  setMantelbuisEntityHighlight,
   validatePveDwg
 };
