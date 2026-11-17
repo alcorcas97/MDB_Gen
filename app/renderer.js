@@ -1054,7 +1054,7 @@ async function updateFc() {
   }
 
   setRunningState(true, false);
-  setStatus('Rehaciendo Klant y Kabel desde FC y BC...', 'neutral');
+  setStatus('Revisando y ajustando Klant y Kabel desde FC y BC...', 'neutral');
   appendLog('Inicio de actualizar FC.', 'meta');
 
   try {
@@ -1070,7 +1070,7 @@ async function updateFc() {
       return;
     }
 
-    appendLog(`FC actualizado en ${result.mdbPath}. Klant rehechos: ${result.rebuiltCustomers ?? 'n/d'}, con cambios en ${result.updatedCustomers} filas y ${result.updatedCustomerFields} campos. Kabel rehechos: ${result.rebuiltCables ?? 'n/d'}, con cambios en ${result.updatedCables} filas y ${result.updatedCableFields} campos. Final: ${result.finalCustomers ?? 'n/d'} clientes, ${result.finalCables ?? 'n/d'} cables.`, 'success');
+    appendLog(`FC actualizado en ${result.mdbPath}. Klant: ${result.insertedCustomers ?? 0} altas, ${result.deletedCustomers ?? 0} bajas y ${result.updatedCustomers ?? 0} filas ajustadas (${result.updatedCustomerFields ?? 0} campos). Kabel: ${result.insertedCables ?? 0} altas, ${result.deletedCables ?? 0} bajas y ${result.updatedCables ?? 0} filas ajustadas (${result.updatedCableFields ?? 0} campos). Final real: ${result.finalCustomers ?? 'n/d'} clientes, ${result.finalCables ?? 'n/d'} cables.`, 'success');
     if (Array.isArray(result.ftuReviewDecisions) && result.ftuReviewDecisions.length > 0) {
       appendLog(`FTU locatie confirmados manualmente: ${result.ftuReviewDecisions.length}.`, 'info');
       for (const decision of result.ftuReviewDecisions) {
@@ -1116,7 +1116,7 @@ async function updateFc() {
       }
     }
     else {
-      setStatus(`FC actualizado: Klant con cambios ${result.updatedCustomers}, Kabel con cambios ${result.updatedCables}.`, 'success');
+      setStatus(`FC ajustado: Klant ${result.updatedCustomers ?? 0} revisados, Kabel ${result.updatedCables ?? 0} revisados.`, 'success');
     }
   }
   catch (error) {

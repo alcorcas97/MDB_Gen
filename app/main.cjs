@@ -3314,7 +3314,7 @@ ipcMain.handle('mdb:update-fc', async (_event, payload) => {
 
   sendGenerationEvent({
     type: 'status',
-    message: 'Leyendo FC y BC para rehacer Klant y Kabel...'
+    message: 'Leyendo FC y BC para revisar diferencias en Klant y Kabel...'
   });
 
   try {
@@ -3353,7 +3353,7 @@ ipcMain.handle('mdb:update-fc', async (_event, payload) => {
     sendGenerationEvent({
       type: 'log',
       level: 'info',
-      message: `FC rehecho en MDB. Klant rehechos: ${result.rebuiltCustomers}, con cambios en ${result.updatedCustomers} filas y ${result.updatedCustomerFields} campos. Kabel rehechos: ${result.rebuiltCables}, con cambios en ${result.updatedCables} filas y ${result.updatedCableFields} campos. Final: ${result.finalCustomers} clientes, ${result.finalCables} cables.\n`
+      message: `FC ajustado en MDB. Klant: ${result.insertedCustomers ?? 0} altas, ${result.deletedCustomers ?? 0} bajas y ${result.updatedCustomers} filas ajustadas (${result.updatedCustomerFields} campos). Kabel: ${result.insertedCables ?? 0} altas, ${result.deletedCables ?? 0} bajas y ${result.updatedCables} filas ajustadas (${result.updatedCableFields} campos). Final real: ${result.finalCustomers} clientes, ${result.finalCables} cables.\n`
     });
 
     if ((result.preservedDrawingStatusCount ?? 0) > 0) {
@@ -3413,6 +3413,10 @@ ipcMain.handle('mdb:update-fc', async (_event, payload) => {
       updatedCableFields: result.updatedCableFields,
       rebuiltCustomers: result.rebuiltCustomers,
       rebuiltCables: result.rebuiltCables,
+      insertedCustomers: result.insertedCustomers,
+      deletedCustomers: result.deletedCustomers,
+      insertedCables: result.insertedCables,
+      deletedCables: result.deletedCables,
       available: result.available,
       finalCustomers: result.finalCustomers,
       finalCables: result.finalCables,

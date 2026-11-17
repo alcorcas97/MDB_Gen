@@ -313,10 +313,17 @@ function Open-Database {
             $currentProjectPath = Resolve-NormalizedPath $accessApplication.CurrentProject.FullName
             if ($null -ne $currentProjectPath -and $currentProjectPath -ieq $resolvedPath) {
                 $database = $accessApplication.CurrentDb()
+                $workspace = $null
+                try {
+                    $workspace = $accessApplication.DBEngine.Workspaces.Item(0)
+                }
+                catch {
+                }
                 return [pscustomobject]@{
                     Mode      = 'Access'
                     Dao       = $null
                     Database  = $database
+                    Workspace = $workspace
                     AccessApp = $accessApplication
                 }
             }
@@ -333,12 +340,14 @@ function Open-Database {
     }
 
     $dao = New-Object -ComObject DAO.DBEngine.120
-    $database = $dao.OpenDatabase($resolvedPath)
+    $workspace = $dao.Workspaces.Item(0)
+    $database = $workspace.OpenDatabase($resolvedPath)
 
     return [pscustomobject]@{
         Mode      = 'Dao'
         Dao       = $dao
         Database  = $database
+        Workspace = $workspace
         AccessApp = $null
     }
 }
@@ -351,6 +360,10 @@ function Close-DatabaseContext {
             $Context.Database.Close()
         }
         [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($Context.Database)
+    }
+
+    if ($null -ne $Context.Workspace) {
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($Context.Workspace)
     }
 
     if ($null -ne $Context.Dao) {
@@ -2393,10 +2406,16 @@ function Set-AccessFieldValue {
     param(
         [__ComObject]$Recordset,
         [string]$FieldName,
-        [object]$Value
+        [object]$Value,
+        [switch]$ExplicitNull
     )
 
     $field = $Recordset.Fields($FieldName)
+    if ($ExplicitNull -and $null -eq $Value) {
+        Set-DaoFieldValue -Field $field -Value ([System.DBNull]::Value)
+        return
+    }
+
     $fieldType = [int]$field.Type
 
     if ($fieldType -eq 10 -or $fieldType -eq 12) {
@@ -2589,6 +2608,26 @@ function Get-FcRefreshData {
 
     $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
     return (ConvertFrom-Json -InputObject ($raw -replace '^\uFEFF', ''))
+}
+
+function Assert-FcRefreshUniqueKeys {
+    param(
+        [string]$TableName,
+        [object[]]$Rows,
+        [string]$Origin
+    )
+
+    $seen = @{}
+    foreach ($row in @($Rows)) {
+        $key = Get-ConnectionSyncKey -TableName $TableName -Row $row
+        if ($null -eq $key) {
+            throw "Una fila de $TableName en $Origin no tiene una clave de sincronizacion valida."
+        }
+        if ($seen.ContainsKey($key)) {
+            throw "Claves duplicadas de $TableName en ${Origin}: $key"
+        }
+        $seen[$key] = $true
+    }
 }
 
 function Get-FcRefreshPreservedFieldNames {
@@ -2851,17 +2890,106 @@ function Get-RowChangeDetails {
     return @($names)
 }
 
+function Update-AccessRowFields {
+    param(
+        [__ComObject]$Database,
+        [string]$TableName,
+        [object]$ExistingRow,
+        [object]$TargetRow,
+        [string[]]$FieldNames
+    )
+
+    if ($FieldNames.Count -eq 0) { return }
+    $id = [int]$ExistingRow.ID
+    $recordset = $Database.OpenRecordset("SELECT * FROM [$TableName] WHERE [ID] = $id")
+    try {
+        if ($recordset.EOF) { throw "No se encontro $TableName ID=$id para actualizar." }
+        $recordset.Edit()
+        foreach ($fieldName in $FieldNames) {
+            $targetValue = $TargetRow.$fieldName
+            Set-AccessFieldValue -Recordset $recordset -FieldName $fieldName -Value $targetValue -ExplicitNull:($null -eq $targetValue)
+        }
+        $recordset.Update()
+    }
+    finally {
+        $recordset.Close()
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($recordset)
+    }
+}
+
+function Remove-AccessRowsById {
+    param(
+        [__ComObject]$Database,
+        [string]$TableName,
+        [object[]]$Rows
+    )
+
+    foreach ($row in $Rows) {
+        $Database.Execute("DELETE FROM [$TableName] WHERE [ID] = $([int]$row.ID)")
+    }
+}
+
+function Apply-FcRefreshDeltas {
+    param(
+        [__ComObject]$Database,
+        [__ComObject]$Workspace,
+        [object[]]$CustomerUpdates,
+        [object[]]$CableUpdates,
+        [object[]]$DeletedCustomers,
+        [object[]]$DeletedCables,
+        [object[]]$InsertedCustomers,
+        [object[]]$InsertedCables
+    )
+
+    if ($null -eq $Workspace) {
+        throw 'No se puede aplicar el refresco FC sin un DAO Workspace transaccional.'
+    }
+
+    $inTransaction = $false
+    try {
+        $Workspace.BeginTrans()
+        $inTransaction = $true
+
+        # Delete dependants first, then create their referenced cable before customers.
+        Remove-AccessRowsById -Database $Database -TableName 'Klant' -Rows $DeletedCustomers
+        Remove-AccessRowsById -Database $Database -TableName 'Kabel' -Rows $DeletedCables
+        foreach ($change in $CableUpdates) {
+            Update-AccessRowFields -Database $Database -TableName 'Kabel' -ExistingRow $change.Existing -TargetRow $change.Target -FieldNames $change.Fields
+        }
+        foreach ($change in $CustomerUpdates) {
+            Update-AccessRowFields -Database $Database -TableName 'Klant' -ExistingRow $change.Existing -TargetRow $change.Target -FieldNames $change.Fields
+        }
+        Write-AccessTable -Database $Database -TableName 'Kabel' -Rows $InsertedCables
+        Write-AccessTable -Database $Database -TableName 'Klant' -Rows $InsertedCustomers
+
+        if ($inTransaction) { $Workspace.CommitTrans() }
+    }
+    catch {
+        if ($inTransaction) { $Workspace.Rollback() }
+        throw
+    }
+}
+
 function Apply-FcRefresh {
     param(
         [__ComObject]$Database,
+        [__ComObject]$Workspace,
         [string]$Path
     )
 
+    if ($null -eq $Workspace) {
+        throw 'No se puede aplicar el refresco FC sin un DAO Workspace transaccional.'
+    }
+
     $sourceData = Get-FcRefreshData -Path $Path
-    $sourceCustomerRows = @(Reset-ConnectionSyncIds -Rows @($sourceData.TableRows.Klant))
-    $sourceCableRows = @(Reset-ConnectionSyncIds -Rows @($sourceData.TableRows.Kabel))
+    $sourceCustomerRows = @($sourceData.TableRows.Klant)
+    $sourceCableRows = @($sourceData.TableRows.Kabel)
     $existingCustomerRows = @(Get-TableRows -Database $Database -TableName 'Klant')
     $existingCableRows = @(Get-TableRows -Database $Database -TableName 'Kabel')
+    Assert-FcRefreshUniqueKeys -TableName 'Klant' -Rows $sourceCustomerRows -Origin 'origen FC'
+    Assert-FcRefreshUniqueKeys -TableName 'Kabel' -Rows $sourceCableRows -Origin 'origen FC'
+    Assert-FcRefreshUniqueKeys -TableName 'Klant' -Rows $existingCustomerRows -Origin 'MDB existente'
+    Assert-FcRefreshUniqueKeys -TableName 'Kabel' -Rows $existingCableRows -Origin 'MDB existente'
     $ductCableLookup = Get-DuctCableLookup -Database $Database
     $noDempingCableLookup = @{}
     foreach ($cableIdValue in @(Get-JsonPropertyValue -Object $sourceData -Names @('NoDempingCableIds'))) {
@@ -2904,6 +3032,10 @@ function Apply-FcRefresh {
     $preservedDrawingStatuses = [System.Collections.Generic.List[object]]::new()
     $customerFieldChanges = @{}
     $cableFieldChanges = @{}
+    $customerUpdates = [System.Collections.Generic.List[object]]::new()
+    $cableUpdates = [System.Collections.Generic.List[object]]::new()
+    $matchedCustomerIds = @{}
+    $matchedCableIds = @{}
 
     foreach ($warning in @($sourceData.FtuReviewWarnings)) {
         if ($null -ne $warning) {
@@ -2950,8 +3082,14 @@ function Apply-FcRefresh {
         $targetCustomerRows += $mergedRow
         Add-FcRefreshCustomerRowByCableId -Lookup $targetCustomersByCableId -Row $mergedRow
 
+        if ($null -ne $existingRow) {
+            $existingId = [int]$existingRow.ID
+            if ($matchedCustomerIds.ContainsKey($existingId)) { throw "Dos filas objetivo de Klant pretenden el ID existente $existingId." }
+            $matchedCustomerIds[$existingId] = $true
+        }
+
         $diff = Compare-RowChangeCount -ExistingRow $existingRow -TargetRow $mergedRow
-        if ($diff.Changed) {
+        if ($diff.Changed -and $null -ne $existingRow) {
             $updatedCustomers++
             $updatedCustomerFields += [int]$diff.Fields
             foreach ($fieldName in (Get-RowChangeDetails -ExistingRow $existingRow -TargetRow $mergedRow)) {
@@ -2960,6 +3098,7 @@ function Apply-FcRefresh {
                 }
                 $customerFieldChanges[$fieldName]++
             }
+            $customerUpdates.Add([pscustomobject]@{ Existing = $existingRow; Target = $mergedRow; Fields = @(Get-RowChangeDetails -ExistingRow $existingRow -TargetRow $mergedRow) })
         }
 
         if ($null -ne $existingRow) {
@@ -3018,8 +3157,14 @@ function Apply-FcRefresh {
         }
         $targetCableRows += $mergedRow
 
+        if ($null -ne $existingRow) {
+            $existingId = [int]$existingRow.ID
+            if ($matchedCableIds.ContainsKey($existingId)) { throw "Dos filas objetivo de Kabel pretenden el ID existente $existingId." }
+            $matchedCableIds[$existingId] = $true
+        }
+
         $diff = Compare-RowChangeCount -ExistingRow $existingRow -TargetRow $mergedRow
-        if ($diff.Changed) {
+        if ($diff.Changed -and $null -ne $existingRow) {
             $updatedCables++
             $updatedCableFields += [int]$diff.Fields
             foreach ($fieldName in (Get-RowChangeDetails -ExistingRow $existingRow -TargetRow $mergedRow)) {
@@ -3028,15 +3173,28 @@ function Apply-FcRefresh {
                 }
                 $cableFieldChanges[$fieldName]++
             }
+            $cableUpdates.Add([pscustomobject]@{ Existing = $existingRow; Target = $mergedRow; Fields = @(Get-RowChangeDetails -ExistingRow $existingRow -TargetRow $mergedRow) })
         }
     }
 
-    $targetCustomerRows = @(Reset-ConnectionSyncIds -Rows $targetCustomerRows)
-    $targetCableRows = @(Reset-ConnectionSyncIds -Rows $targetCableRows)
+    $deletedCustomers = @($existingCustomerRows | Where-Object { -not $matchedCustomerIds.ContainsKey([int]$_.ID) })
+    $deletedCables = @($existingCableRows | Where-Object { -not $matchedCableIds.ContainsKey([int]$_.ID) })
+    Assert-FcRefreshUniqueKeys -TableName 'Klant' -Rows $targetCustomerRows -Origin 'destino FC'
+    Assert-FcRefreshUniqueKeys -TableName 'Kabel' -Rows $targetCableRows -Origin 'destino FC'
+    $insertedCustomers = @($targetCustomerRows | Where-Object {
+        $key = Get-ConnectionSyncKey -TableName 'Klant' -Row $_
+        $null -eq $key -or -not $existingCustomersByKey.ContainsKey($key)
+    })
+    $insertedCables = @($targetCableRows | Where-Object {
+        $key = Get-ConnectionSyncKey -TableName 'Kabel' -Row $_
+        $existingRow = if ($null -ne $key -and $existingCablesByKey.ContainsKey($key)) { $existingCablesByKey[$key] } else { Find-FcRefreshDistributionCableMatch -SourceRow $_ -ExistingRowsByRoute $existingDistributionCablesByRoute }
+        $null -eq $existingRow
+    })
 
-    Clear-AccessTables -Database $Database -TableNames @('Klant', 'Kabel')
-    Write-AccessTable -Database $Database -TableName 'Kabel' -Rows $targetCableRows
-    Write-AccessTable -Database $Database -TableName 'Klant' -Rows $targetCustomerRows
+    Apply-FcRefreshDeltas -Database $Database -Workspace $Workspace -CustomerUpdates @($customerUpdates) -CableUpdates @($cableUpdates) -DeletedCustomers $deletedCustomers -DeletedCables $deletedCables -InsertedCustomers $insertedCustomers -InsertedCables $insertedCables
+
+    $finalCustomers = @(Get-TableRows -Database $Database -TableName 'Klant')
+    $finalCables = @(Get-TableRows -Database $Database -TableName 'Kabel')
 
     $sourceCustomerIds = @(Get-ConnectionCableIdsFromRows -Rows $sourceCustomerRows)
     $existingCustomerIds = @(Get-ConnectionCableIdsFromRows -Rows $existingCustomerRows)
@@ -3056,8 +3214,12 @@ function Apply-FcRefresh {
         available             = $sourceCustomerRows.Count
         rebuiltCustomers      = $sourceCustomerRows.Count
         rebuiltCables         = $sourceCableRows.Count
-        finalCustomers        = $targetCustomerRows.Count
-        finalCables           = $targetCableRows.Count
+        insertedCustomers     = $insertedCustomers.Count
+        deletedCustomers      = $deletedCustomers.Count
+        insertedCables        = $insertedCables.Count
+        deletedCables         = $deletedCables.Count
+        finalCustomers        = $finalCustomers.Count
+        finalCables           = $finalCables.Count
         addedCustomers        = $addedCustomerIds.Count
         removedCustomers      = $removedCustomerIds.Count
         customerFieldChanges  = [pscustomobject]$customerFieldChanges
@@ -3726,7 +3888,7 @@ try {
         }
 
         'ApplyFcRefresh' {
-            Apply-FcRefresh -Database $context.Database -Path $AssignmentsPath | ConvertTo-Json -Depth 4
+            Apply-FcRefresh -Database $context.Database -Workspace $context.Workspace -Path $AssignmentsPath | ConvertTo-Json -Depth 4
             break
         }
 
