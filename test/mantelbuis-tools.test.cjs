@@ -12,6 +12,16 @@ test('Mantelbuis LISP exports endpoints and restores material polylines as DRILL
   }
   assert.doesNotMatch(lisp, /\bentsel\b/i);
   assert.doesNotMatch(lisp, /\(or (?:handle|layer|suggestedMaterial) /);
+  assert.match(lisp, /\(fmdb-mantelbuis-text-point object\)/);
+  assert.match(lisp, /\(fmdb-mantelbuis-text object\)/);
+});
+
+test('Boring title block diameter is only a manual suggestion when the material is unspecified', () => {
+  assert.deepEqual(_internal.extractBoringMaterial('Lengte 10,84 meter, 1x Ø40 mm SDR17 zwart'), []);
+  assert.equal(_internal.suggestBoringMaterial('Lengte 10,84 meter, 1x Ø40 mm SDR17 zwart'), 'HDPE40-Zwart');
+  assert.equal(_internal.suggestBoringMaterial('Lengte 11,84 meter, 1x Ø63 mm SDR17 zwart'), 'HDPE63-Zwart');
+  assert.equal(_internal.suggestBoringMaterial('1x Ø40 mm SDR17 zwart\n1x Ø63 mm SDR17 zwart'), null);
+  assert.equal(_internal.suggestBoringMaterial('boorgang Ø40 mm'), null);
 });
 
 test('Mantelbuis parser normalizes materials, assigns boring type and deduplicates reversed millimetric geometry', () => {
@@ -66,11 +76,11 @@ test('Mantelbuis boring rows retain each extracted material on the matched geome
         ? { materials: ['HDPE63-Zwart', 'HDPE160-Zwart'], coordinates: { X_A: 10, Y_A: 20, X_B: 11, Y_B: 21 } }
         : name.endsWith('02.dwg')
           ? { materials: ['HDPE75-Zwart'], coordinates: { X_A: 30, Y_A: 40, X_B: 31, Y_B: 41 } }
-          : { materials: [], coordinates: null }
+          : { materials: [], coordinates: null, suggestedMaterial: 'HDPE63-Zwart' }
     });
     assert.deepEqual(result.rows.map((row) => row.Soort_Materie), ['HDPE63-Zwart', 'HDPE160-Zwart', 'HDPE75-Zwart']);
     assert.deepEqual(result.rows.slice(0, 2).map(({ X_A, Y_A, X_B, Y_B }) => ({ X_A, Y_A, X_B, Y_B })), [{ X_A: 10, Y_A: 20, X_B: 11, Y_B: 21 }, { X_A: 10, Y_A: 20, X_B: 11, Y_B: 21 }]);
-    assert.deepEqual(result.unresolved, [{ kind: 'UNRESOLVED', handle: 'Project-Boring03.dwg', layer: 'Boring: Project-Boring03.dwg', suggestedMaterial: null, xA: 50, yA: 60, xB: 51, yB: 61, Boring_Type: 'Gestuurde Boring', Boorprofiel: 'Project-Boring03.dwg' }]);
+    assert.deepEqual(result.unresolved, [{ kind: 'UNRESOLVED', handle: 'Project-Boring03.dwg', layer: 'Boring: Project-Boring03.dwg', suggestedMaterial: 'HDPE63-Zwart', xA: 50, yA: 60, xB: 51, yB: 61, Boring_Type: 'Gestuurde Boring', Boorprofiel: 'Project-Boring03.dwg' }]);
     assert.deepEqual(result.reviewItems, []);
   }
   finally {

@@ -987,8 +987,9 @@ ${buildProgressHelpersLisp(progressFilePath)}
       (setq entity (ssname selection index))
       (setq entityData (entget entity) objectName (cdr (assoc 0 entityData)))
       (if (member objectName '("TEXT" "MTEXT" "MULTILEADER")) (progn
-        (setq text (if (= objectName "MULTILEADER") (cdr (assoc 304 entityData)) (cdr (assoc 1 entityData))))
-        (setq material (fmdb-mantelbuis-material text) point (cdr (assoc 10 entityData)))
+        (setq object (vlax-ename->vla-object entity))
+        (setq text (if (= objectName "MULTILEADER") (or (fmdb-mantelbuis-text object) (cdr (assoc 304 entityData))) (cdr (assoc 1 entityData))))
+        (setq material (fmdb-mantelbuis-material text) point (if (= objectName "MULTILEADER") (fmdb-mantelbuis-text-point object) (cdr (assoc 10 entityData))))
         (if (and material point) (setq texts (cons (list material point (cdr (assoc 50 entityData))) texts)))
         (if (and point (fmdb-mantelbuis-boring-reference-p text)) (fmdb-mantelbuis-write "REFERENCE" text point point))
       ))
@@ -1123,6 +1124,12 @@ function extractBoringCoordinates(text) {
   return entrance && exit ? { X_A: entrance.x, Y_A: entrance.y, X_B: exit.x, Y_B: exit.y } : null;
 }
 
+function suggestBoringMaterial(text) {
+  const matches = [...String(text ?? '').toUpperCase().matchAll(/\b1\s*X\s*(?:%%C|\\U\+2205|Ø|⌀)\s*(40|50|63|75|110|160|200)\s*(?:MM)?\s+SDR\s*\d+\s+ZWART\b/g)];
+  const suggestions = [...new Set(matches.map((match) => normalizeMantelbuisMaterial(`HDPE${match[1]}`, { boring: true })).filter(Boolean))];
+  return suggestions.length === 1 ? suggestions[0] : null;
+}
+
 function parseMantelbuisExport(text) {
   const records = [];
   for (const line of String(text ?? '').replace(/\r/g, '').split('\n')) {
@@ -1211,8 +1218,12 @@ async function readBoringPdfDetails(projectFolderPath, boringFileName) {
     text = '';
   }
   let materials = extractBoringMaterial(text);
-  if (materials.length === 0) materials = extractBoringMaterial(await readBoringDwgText(path.join(folder, boringFileName)));
-  return { materials, coordinates: extractBoringCoordinates(text) };
+  let dwgText = '';
+  if (materials.length === 0) {
+    dwgText = await readBoringDwgText(path.join(folder, boringFileName));
+    materials = extractBoringMaterial(dwgText);
+  }
+  return { materials, coordinates: extractBoringCoordinates(text), suggestedMaterial: materials.length ? null : suggestBoringMaterial(dwgText) };
 }
 
 async function buildBoringRows(projectFolderPath, records, { readDetails = readBoringPdfDetails } = {}) {
@@ -1238,7 +1249,7 @@ async function buildBoringRows(projectFolderPath, records, { readDetails = readB
       coordinates = { X_A: ranked[0].line.xA, Y_A: ranked[0].line.yA, X_B: ranked[0].line.xB, Y_B: ranked[0].line.yB };
     }
     if (details.materials.length === 0) {
-      unresolved.push({ kind: 'UNRESOLVED', handle: file.name, layer: `Boring: ${reference.value}`, suggestedMaterial: null, xA: coordinates.X_A, yA: coordinates.Y_A, xB: coordinates.X_B, yB: coordinates.Y_B, Boring_Type: 'Gestuurde Boring', Boorprofiel: file.name });
+      unresolved.push({ kind: 'UNRESOLVED', handle: file.name, layer: `Boring: ${reference.value}`, suggestedMaterial: details.suggestedMaterial ?? null, xA: coordinates.X_A, yA: coordinates.Y_A, xB: coordinates.X_B, yB: coordinates.Y_B, Boring_Type: 'Gestuurde Boring', Boorprofiel: file.name });
       continue;
     }
     for (const material of details.materials) rows.push({ ...coordinates, Soort_Materie: material, Boring_Type: 'Gestuurde Boring', Boorprofiel: file.name, ImportResult: '' });
@@ -4639,6 +4650,7 @@ module.exports = {
     buildManualMantelbuisRow,
     extractBoringCoordinates,
     extractBoringMaterial,
+    suggestBoringMaterial,
     normalizeMantelbuisMaterial,
     readBoringPdfDetails,
     parseMantelbuisExport,
