@@ -2561,10 +2561,22 @@ async function resolveAmbiguousFtuLocations(assignmentsPath) {
 
 async function promptTextInput(title, message, defaultValue = '') {
   const script = `
-    (() => {
-      const value = window.prompt(${JSON.stringify(message)}, ${JSON.stringify(defaultValue)});
-      return value === null ? null : String(value);
-    })()
+    new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;padding:20px';
+      const box = document.createElement('form');
+      box.style.cssText = 'background:#14272b;color:#ecf7f3;padding:24px;border:1px solid #49625f;border-radius:14px;max-width:580px;width:100%;box-shadow:0 16px 50px #0008';
+      const heading = document.createElement('h2'); heading.textContent = ${JSON.stringify(title)};
+      const detail = document.createElement('p'); detail.textContent = ${JSON.stringify(message)}; detail.style.whiteSpace = 'pre-wrap';
+      const input = document.createElement('input'); input.value = ${JSON.stringify(defaultValue)}; input.style.cssText = 'width:100%;padding:10px;margin:8px 0 16px;box-sizing:border-box';
+      const accept = document.createElement('button'); accept.type = 'submit'; accept.textContent = 'Aceptar';
+      const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Cancelar'; cancel.style.marginLeft = '10px';
+      const finish = (value) => { overlay.remove(); resolve(value); };
+      box.addEventListener('submit', (event) => { event.preventDefault(); finish(input.value); });
+      cancel.addEventListener('click', () => finish(null));
+      box.addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.preventDefault(); finish(null); } });
+      box.append(heading, detail, input, accept, cancel); overlay.append(box); document.body.append(overlay); input.focus(); input.select();
+    })
   `;
 
   return mainWindow.webContents.executeJavaScript(script, true);
@@ -2582,7 +2594,7 @@ async function resolveMantelbuisUnresolved(unresolved, { normalizeMaterial, buil
     try {
       if (typeof setEntityHighlight === 'function') {
         try {
-          const result = await setEntityHighlight(dwgPath, item.handle, true);
+          const result = await setEntityHighlight(dwgPath, item.handle, true, item);
           highlighted = result?.highlighted === true;
           if (!highlighted) {
             sendGenerationEvent({ type: 'log', level: 'warning', message: `No se ha podido resaltar temporalmente Mantelbuis ${item.handle}: ${result?.reason ?? 'sin detalle'}. Se mantiene la decision manual.\n` });
@@ -2599,15 +2611,25 @@ async function resolveMantelbuisUnresolved(unresolved, { normalizeMaterial, buil
           title: 'Material dudoso de Mantelbuis',
           message: 'Confirma el material para esta geometria.',
           detail: `${formatMantelbuisUnresolved(item)}${highlighted ? '\n\nEsta entidad esta resaltada temporalmente en AutoCAD.' : ''}${suggestion ? `\n\nSugerencia cercana: ${suggestion}` : ''}`,
-          buttons: suggestion ? [`Usar ${suggestion}`, 'Otro...', 'Omitir', 'Cancelar'] : ['Otro...', 'Omitir', 'Cancelar'],
+          buttons: suggestion ? [`Usar ${suggestion}`, 'Otro...', 'Localizar en AutoCAD', 'Omitir', 'Cancelar'] : ['Otro...', 'Localizar en AutoCAD', 'Omitir', 'Cancelar'],
           defaultId: suggestion ? 0 : 0,
-          cancelId: suggestion ? 3 : 2,
+          cancelId: suggestion ? 4 : 3,
           noLink: true
         };
         const response = highlighted
           ? await dialog.showMessageBox(dialogOptions)
           : await dialog.showMessageBox(mainWindow, dialogOptions);
-        const action = suggestion ? ['suggestion', 'other', 'skip', 'cancel'][response.response] : ['other', 'skip', 'cancel'][response.response];
+        const action = suggestion ? ['suggestion', 'other', 'locate', 'skip', 'cancel'][response.response] : ['other', 'locate', 'skip', 'cancel'][response.response];
+        if (action === 'locate') {
+          try {
+            const result = await setEntityHighlight(dwgPath, item.handle, true, item);
+            highlighted = result?.highlighted === true;
+            if (!highlighted) await dialog.showMessageBox(mainWindow, { type: 'warning', message: 'No se ha podido localizar la geometria en AutoCAD.', detail: `Comprueba que el DWG del proyecto este abierto. Detalle: ${result?.reason ?? 'sin detalle'}`, buttons: ['Aceptar'] });
+          } catch (error) {
+            await dialog.showMessageBox(mainWindow, { type: 'warning', message: 'No se ha podido localizar la geometria en AutoCAD.', detail: String(error?.message ?? error), buttons: ['Aceptar'] });
+          }
+          continue;
+        }
         if (action === 'cancel') return { cancelled: true, confirmedRows, reviewItems };
         if (action === 'skip') {
           reviewItems.push(`MLINE omitida: ${formatMantelbuisUnresolved(item).replace(/\n/g, '; ')}`);
@@ -2631,7 +2653,7 @@ async function resolveMantelbuisUnresolved(unresolved, { normalizeMaterial, buil
     finally {
       if (typeof setEntityHighlight === 'function') {
         try {
-          const result = await setEntityHighlight(dwgPath, item.handle, false);
+          const result = await setEntityHighlight(dwgPath, item.handle, false, item);
           if (!result?.cleared) sendGenerationEvent({ type: 'log', level: 'warning', message: `No se ha podido limpiar el resaltado temporal de Mantelbuis ${item.handle}: ${result?.reason ?? 'sin detalle'}.\n` });
         }
         catch (error) {

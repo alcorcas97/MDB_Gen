@@ -128,8 +128,20 @@ test('Mantelbuis highlight uses direct AutoCAD COM without sending a command or 
   assert.match(highlightFunction, /enabled \? '-Enabled' : '-Disable'/);
   assert.match(highlightFunction, /timeoutMs: options\.timeoutMs \?\? 10000/);
   assert.doesNotMatch(highlightFunction, /tryRunCommandOnOpenDocument|buildMantelbuisEntityHighlightLisp|\.lsp|progressFilePath|AccoreConsole/);
-  assert.match(mainSource, /await setEntityHighlight\(dwgPath, item\.handle, true\)/);
-  assert.match(mainSource, /finally \{\s*if \(typeof setEntityHighlight === 'function'\)[\s\S]*await setEntityHighlight\(dwgPath, item\.handle, false\)/);
+  assert.match(mainSource, /await setEntityHighlight\(dwgPath, item\.handle, true, item\)/);
+  assert.match(mainSource, /finally \{\s*if \(typeof setEntityHighlight === 'function'\)[\s\S]*await setEntityHighlight\(dwgPath, item\.handle, false, item\)/);
   assert.match(mainSource, /Esta entidad esta resaltada temporalmente en AutoCAD\./);
   assert.match(mainSource, /highlighted\s*\? await dialog\.showMessageBox\(dialogOptions\)/);
+});
+
+test('Mantelbuis localization uses exact document paths and rejects ambiguous coordinate matches', () => {
+  const script = fs.readFileSync(path.join(__dirname, '..', 'app', 'autocad_tools.ps1'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '..', 'app', 'lib', 'dwg-tools.cjs'), 'utf8');
+  assert.match(script, /\$docPath -ieq \$TargetPath/);
+  assert.match(script, /\$matches\.Count -gt 1\) \{ 'AmbiguousDocument'/);
+  assert.match(script, /\$candidates\.Count -gt 1\) \{ throw 'AmbiguousEntity'/);
+  assert.match(script, /\$forward -or \$reverse/);
+  assert.match(script, /GetBoundingBox\(\[ref\]\$minimum, \[ref\]\$maximum\)/);
+  assert.match(script, /\$application\.ZoomWindow/);
+  assert.match(source, /'-EntityEndpoints'/);
 });

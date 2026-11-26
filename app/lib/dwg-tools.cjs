@@ -1066,6 +1066,9 @@ async function setMantelbuisEntityHighlight(dwgPath, handle, enabled, options = 
       dwgPath,
       '-EntityHandle',
       normalizedHandle,
+      ...([options.xA, options.yA, options.xB, options.yB].every(Number.isFinite)
+        ? ['-EntityEndpoints', [options.xA, options.yA, options.xB, options.yB].join(',')]
+        : []),
       enabled ? '-Enabled' : '-Disable'
     ], {
       timeoutMs: options.timeoutMs ?? 10000

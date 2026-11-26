@@ -14,6 +14,7 @@ param(
     [string]$OutputPath,
     [string]$PromptText,
     [string]$EntityHandle,
+    [string]$EntityEndpoints,
     [switch]$Enabled,
     [switch]$Disable,
     [int]$TimeoutSeconds = 600,
@@ -31,6 +32,9 @@ using System.Runtime.InteropServices;
 public static class FmdbWindowTools {
     [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindowAsync(IntPtr hWnd, int command);
 
     [DllImport("user32.dll")]
     public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
@@ -106,7 +110,7 @@ function Get-OpenDocumentByPath {
 
     foreach ($document in $Application.Documents) {
         try {
-            $documentPath = Resolve-NormalizedPath $document.FullName
+            $documentPath = Resolve-NormalizedPath $document.FullName -AllowMissing
             if ($null -ne $documentPath -and $documentPath -ieq $TargetPath) {
                 return $document
             }
@@ -116,6 +120,41 @@ function Get-OpenDocumentByPath {
     }
 
     return $null
+}
+
+function Find-AutoCadDocumentForHighlight {
+    param([string]$TargetPath)
+
+    $progIds = @('AutoCAD.Application')
+    try {
+        $progIds += @(Get-ChildItem Registry::HKEY_CLASSES_ROOT -ErrorAction SilentlyContinue |
+            Where-Object { $_.PSChildName -like 'AutoCAD.Application.*' } |
+            Select-Object -ExpandProperty PSChildName)
+    }
+    catch { }
+    $seen = @{}
+    $matches = @()
+    $paths = @()
+    foreach ($progId in ($progIds | Select-Object -Unique)) {
+        try {
+            $app = [System.Runtime.InteropServices.Marshal]::GetActiveObject($progId)
+            $key = [string]$app.HWND
+            if ($seen.ContainsKey($key)) { continue }
+            $seen[$key] = $true
+            foreach ($doc in $app.Documents) {
+                try {
+                    $docPath = Resolve-NormalizedPath $doc.FullName -AllowMissing
+                    $paths += $docPath
+                    if ($docPath -ieq $TargetPath) { $matches += [pscustomobject]@{ application = $app; document = $doc } }
+                }
+                catch { }
+            }
+        }
+        catch { }
+    }
+    if ($matches.Count -eq 1) { return $matches[0] }
+    $reason = if ($matches.Count -gt 1) { 'AmbiguousDocument' } elseif ($seen.Count -eq 0) { 'AutoCADNotRunning' } else { 'DocumentNotOpen' }
+    return [pscustomobject]@{ application = $null; document = $null; reason = "$reason (DWG: $TargetPath; abiertos: $($paths -join ' | '))" }
 }
 
 function Send-DocumentCommand {
@@ -151,6 +190,7 @@ function Focus-AutoCadWindow {
         }
 
         if ($null -ne $hwnd -and $hwnd -ne [IntPtr]::Zero) {
+            [void][FmdbWindowTools]::ShowWindowAsync($hwnd, 9)
             $processId = [uint32]0
             [void][FmdbWindowTools]::GetWindowThreadProcessId($hwnd, [ref]$processId)
             if ($processId -gt 0) {
@@ -428,38 +468,46 @@ switch ($Mode) {
             return
         }
 
-        $application = Get-ActiveAutoCadApplication
+        $match = Find-AutoCadDocumentForHighlight -TargetPath $resolvedDwgPath
+        $application = $match.application
         if ($null -eq $application) {
             [pscustomobject]@{
                 handled     = $false
                 applied     = $false
                 highlighted = $false
                 cleared     = $false
-                reason      = 'AutoCADNotRunning'
+                reason      = $match.reason
             } | ConvertTo-Json -Compress
             return
         }
 
-        $document = $null
+        $document = $match.document
         $entity = $null
         try {
-            $document = Get-OpenDocumentByPath -Application $application -TargetPath $resolvedDwgPath
-            if ($null -eq $document) {
-                [pscustomobject]@{
-                    handled     = $false
-                    applied     = $false
-                    highlighted = $false
-                    cleared     = $false
-                    reason      = 'DocumentNotOpen'
-                } | ConvertTo-Json -Compress
-                return
-            }
-
-            $document.Activate()
-            Focus-AutoCadWindow -Application $application -Document $document -WaitMilliseconds 0
-
             try {
-                $entity = $document.HandleToObject($EntityHandle.Trim())
+                if ($EntityHandle.Trim() -match '^[0-9a-fA-F]+$') {
+                    $entity = $document.HandleToObject($EntityHandle.Trim())
+                }
+                elseif (-not [string]::IsNullOrWhiteSpace($EntityEndpoints)) {
+                    $endpoints = @($EntityEndpoints.Split(',') | ForEach-Object { [double]::Parse($_, [System.Globalization.CultureInfo]::InvariantCulture) })
+                    if ($endpoints.Count -ne 4) { throw 'InvalidEndpoints' }
+                    $candidates = @()
+                    foreach ($candidate in $document.ModelSpace) {
+                        if ($candidate.ObjectName -ne 'AcDbMline') { continue }
+                        try {
+                            $coordinates = @($candidate.Coordinates)
+                            if ($coordinates.Count -lt 6) { continue }
+                            $last = $coordinates.Count - 3
+                            $forward = [Math]::Abs($coordinates[0] - $endpoints[0]) -le 0.01 -and [Math]::Abs($coordinates[1] - $endpoints[1]) -le 0.01 -and [Math]::Abs($coordinates[$last] - $endpoints[2]) -le 0.01 -and [Math]::Abs($coordinates[$last + 1] - $endpoints[3]) -le 0.01
+                            $reverse = [Math]::Abs($coordinates[0] - $endpoints[2]) -le 0.01 -and [Math]::Abs($coordinates[1] - $endpoints[3]) -le 0.01 -and [Math]::Abs($coordinates[$last] - $endpoints[0]) -le 0.01 -and [Math]::Abs($coordinates[$last + 1] - $endpoints[1]) -le 0.01
+                            if ($forward -or $reverse) { $candidates += $candidate }
+                        }
+                        catch { }
+                    }
+                    if ($candidates.Count -gt 1) { throw 'AmbiguousEntity' }
+                    if ($candidates.Count -eq 1) { $entity = $candidates[0] }
+                }
+                if ($null -eq $entity) { throw 'EntityNotFound' }
             }
             catch {
                 [pscustomobject]@{
@@ -467,12 +515,31 @@ switch ($Mode) {
                     applied     = $false
                     highlighted = $false
                     cleared     = $false
-                    reason      = 'EntityNotFound'
+                    reason      = ('EntityNotFound: ' + $_.Exception.Message)
                 } | ConvertTo-Json -Compress
                 return
             }
 
             try {
+                if ($Enabled) {
+                    $document.Activate()
+                    Focus-AutoCadWindow -Application $application -Document $document -WaitMilliseconds 0
+                    try {
+                        $minimum = $null
+                        $maximum = $null
+                        $entity.GetBoundingBox([ref]$minimum, [ref]$maximum)
+                        $minPoint = @($minimum)
+                        $maxPoint = @($maximum)
+                        $width = [Math]::Max([Math]::Abs([double]$maxPoint[0] - [double]$minPoint[0]), 10.0)
+                        $height = [Math]::Max([Math]::Abs([double]$maxPoint[1] - [double]$minPoint[1]), 10.0)
+                        $centerX = ([double]$minPoint[0] + [double]$maxPoint[0]) / 2.0
+                        $centerY = ([double]$minPoint[1] + [double]$maxPoint[1]) / 2.0
+                        $application.ZoomWindow([double[]]@($centerX - $width, $centerY - $height, 0), [double[]]@($centerX + $width, $centerY + $height, 0))
+                    }
+                    catch {
+                        # Highlighting remains useful when an entity cannot provide bounds.
+                    }
+                }
                 $entity.Highlight([bool]$Enabled)
                 $entity.Update()
                 [pscustomobject]@{
