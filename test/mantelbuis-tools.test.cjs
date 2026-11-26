@@ -16,6 +16,16 @@ test('Mantelbuis LISP exports endpoints and restores material polylines as DRILL
   assert.match(lisp, /\(fmdb-mantelbuis-text object\)/);
 });
 
+test('Mantelbuis guards MLEADER COM conversion and preserves string and point fallbacks', () => {
+  const lisp = _internal.buildCreateMantelbuisLisp({ outputFilePath: 'C:\\temp\\mantelbuis.tsv', progressFilePath: 'C:\\temp\\mantelbuis.progress' });
+  assert.match(lisp, /\(setq text \(cdr \(assoc 304 entityData\)\) point nil\)/);
+  assert.match(lisp, /\(vl-catch-all-apply 'vlax-ename->vla-object \(list entity\)\)/);
+  assert.match(lisp, /\(if \(and object \(not \(vl-catch-all-error-p object\)\)\)/);
+  assert.match(lisp, /\(if object \(setq text object\)\)/);
+  assert.doesNotMatch(lisp, /\(or \(fmdb-mantelbuis-text object\)/);
+  assert.match(lisp, /\(if \(not \(vl-catch-all-error-p result\)\) \(setq point \(fmdb-mantelbuis-point-list result\)\)\)/);
+});
+
 test('Boring title block diameter is only a manual suggestion when the material is unspecified', () => {
   assert.deepEqual(_internal.extractBoringMaterial('Lengte 10,84 meter, 1x Ø40 mm SDR17 zwart'), []);
   assert.equal(_internal.suggestBoringMaterial('Lengte 10,84 meter, 1x Ø40 mm SDR17 zwart'), 'HDPE40-Zwart');
